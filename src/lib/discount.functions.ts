@@ -26,14 +26,19 @@ const SubmitSchema = z.object({
   requestedBy: z.string().max(100).optional().nullable(),
 });
 
+const STABLE_PUBLIC_URL = "https://project--5d498845-315c-4003-af46-2a005cd23f71.lovable.app";
+
 function getBaseUrl() {
+  const override = process.env.PUBLIC_APP_URL;
+  if (override) return override.replace(/\/$/, "");
   try {
     const proto = getRequestHeader("x-forwarded-proto") || "https";
     const host = getRequestHost();
-    return `${proto}://${host}`;
-  } catch {
-    return "https://project--5d498845-315c-4003-af46-2a005cd23f71.lovable.app";
-  }
+    if (host && !/^(localhost|127\.0\.0\.1|0\.0\.0\.0)/i.test(host)) {
+      return `${proto}://${host}`;
+    }
+  } catch {}
+  return STABLE_PUBLIC_URL;
 }
 
 function escapeHtml(s: string) {
