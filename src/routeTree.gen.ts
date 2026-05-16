@@ -9,9 +9,15 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as RequestsRouteImport } from './routes/requests'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiPublicDiscountDecisionRouteImport } from './routes/api/public/discount.decision'
 
+const RequestsRoute = RequestsRouteImport.update({
+  id: '/requests',
+  path: '/requests',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -26,32 +32,43 @@ const ApiPublicDiscountDecisionRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/requests': typeof RequestsRoute
   '/api/public/discount/decision': typeof ApiPublicDiscountDecisionRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/requests': typeof RequestsRoute
   '/api/public/discount/decision': typeof ApiPublicDiscountDecisionRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/requests': typeof RequestsRoute
   '/api/public/discount/decision': typeof ApiPublicDiscountDecisionRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/public/discount/decision'
+  fullPaths: '/' | '/requests' | '/api/public/discount/decision'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/public/discount/decision'
-  id: '__root__' | '/' | '/api/public/discount/decision'
+  to: '/' | '/requests' | '/api/public/discount/decision'
+  id: '__root__' | '/' | '/requests' | '/api/public/discount/decision'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  RequestsRoute: typeof RequestsRoute
   ApiPublicDiscountDecisionRoute: typeof ApiPublicDiscountDecisionRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/requests': {
+      id: '/requests'
+      path: '/requests'
+      fullPath: '/requests'
+      preLoaderRoute: typeof RequestsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -71,6 +88,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  RequestsRoute: RequestsRoute,
   ApiPublicDiscountDecisionRoute: ApiPublicDiscountDecisionRoute,
 }
 export const routeTree = rootRouteImport
