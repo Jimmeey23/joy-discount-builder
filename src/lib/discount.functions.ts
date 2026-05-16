@@ -2,12 +2,19 @@ import { createServerFn } from "@tanstack/react-start";
 import { getRequestHost, getRequestHeader } from "@tanstack/react-start/server";
 import { z } from "zod";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import type { Tables } from "@/integrations/supabase/types";
 
 const APPROVAL_EMAIL = "jimmeey@physique57india.com";
 const MOMENCE_HOST_ID = 13752;
+type DiscountRequestRow = Tables<"discount_requests">;
 
 const SubmitSchema = z.object({
-  code: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9_$@!\-]+$/),
+  code: z
+    .string()
+    .trim()
+    .min(1)
+    .max(64)
+    .regex(/^[A-Za-z0-9_$@!-]+$/),
   discountType: z.enum(["percentage", "fixed"]),
   discountValue: z.number().min(0).max(1000000),
   usageLimitType: z.enum(["unlimited", "limited"]),
@@ -37,12 +44,17 @@ function getBaseUrl() {
     if (host && !/^(localhost|127\.0\.0\.1|0\.0\.0\.0)/i.test(host)) {
       return `${proto}://${host}`;
     }
-  } catch {}
+  } catch {
+    return STABLE_PUBLIC_URL;
+  }
   return STABLE_PUBLIC_URL;
 }
 
 function escapeHtml(s: string) {
-  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
+  return s.replace(
+    /[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!,
+  );
 }
 
 async function sendMailtrap(opts: { to: string; subject: string; html: string; text: string }) {
@@ -73,11 +85,15 @@ async function sendMailtrap(opts: { to: string; subject: string; html: string; t
   return res.json();
 }
 
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function buildApprovalEmail(opts: {
   baseUrl: string;
   approveToken: string;
   rejectToken: string;
-  row: any;
+  row: DiscountRequestRow;
 }) {
   const { baseUrl, approveToken, rejectToken, row } = opts;
   const approveUrl = `${baseUrl}/api/public/discount/decision?token=${approveToken}&action=approve`;
@@ -88,16 +104,12 @@ function buildApprovalEmail(opts: {
   const usageDisplay =
     row.usage_limit_type === "unlimited" ? "Unlimited" : `${row.usage_amount} uses`;
   const renewalDisplay =
-    row.renewal_limit_type === "unlimited"
-      ? "Unlimited"
-      : `${row.renewals_count} renewals`;
+    row.renewal_limit_type === "unlimited" ? "Unlimited" : `${row.renewals_count} renewals`;
   const expiryDisplay = row.expires_at
     ? new Date(row.expires_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
     : "No expiration";
   const appliesDisplay =
-    row.applies_to === "everything"
-      ? "Everything"
-      : `${row.membership_names.length} memberships`;
+    row.applies_to === "everything" ? "Everything" : `${row.membership_names.length} memberships`;
 
   const rows: Array<[string, string]> = [
     ["Discount code", row.code],
@@ -179,10 +191,9 @@ export const submitDiscountRequest = createServerFn({ method: "POST" })
         discount_type: data.discountType,
         discount_value: data.discountValue,
         usage_limit_type: data.usageLimitType,
-        usage_amount: data.usageLimitType === "limited" ? data.usageAmount ?? null : null,
+        usage_amount: data.usageLimitType === "limited" ? (data.usageAmount ?? null) : null,
         renewal_limit_type: data.renewalLimitType,
-        renewals_count:
-          data.renewalLimitType === "limited" ? data.renewalsCount ?? null : null,
+        renewals_count: data.renewalLimitType === "limited" ? (data.renewalsCount ?? null) : null,
         expires_at: data.expiresAt || null,
         applies_to: data.appliesTo,
         membership_ids: data.appliesTo === "specific" ? data.membershipIds : [],
@@ -216,18 +227,24 @@ export const submitDiscountRequest = createServerFn({ method: "POST" })
         html,
         text,
       });
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error("Mailtrap send error", e);
+      const message = errorMessage(e);
       await supabaseAdmin
         .from("discount_requests")
-        .update({ error_message: `Email send failed: ${e?.message ?? String(e)}` })
+        .update({ error_message: `Email send failed: ${message}` })
         .eq("id", row.id);
-      throw new Error(
-        `Request saved but approval email failed to send: ${e?.message ?? String(e)}`,
-      );
+      return {
+        id: row.id,
+        code: row.code,
+        emailSent: false,
+        emailError: message,
+        approveUrl: `${baseUrl}/api/public/discount/decision?token=${row.approve_token}&action=approve`,
+        rejectUrl: `${baseUrl}/api/public/discount/decision?token=${row.reject_token}&action=reject`,
+      };
     }
 
-    return { id: row.id, code: row.code };
+    return { id: row.id, code: row.code, emailSent: true };
   });
 
 export const listDiscountRequests = createServerFn({ method: "GET" }).handler(async () => {

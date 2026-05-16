@@ -121,10 +121,7 @@ function MembershipPicker({
             <>
               {selectedNames().join(", ")}
               {selected.length > 3 && (
-                <span className="text-muted-foreground">
-                  {" "}
-                  +{selected.length - 3} more
-                </span>
+                <span className="text-muted-foreground"> +{selected.length - 3} more</span>
               )}
             </>
           )}
@@ -140,11 +137,7 @@ function MembershipPicker({
               className="inline-flex items-center gap-1 bg-primary/10 text-primary text-xs px-2 py-1 rounded-md border border-primary/20"
             >
               {m.name}
-              <button
-                type="button"
-                onClick={() => toggle(m.id)}
-                className="hover:text-primary/70"
-              >
+              <button type="button" onClick={() => toggle(m.id)} className="hover:text-primary/70">
                 <X className="h-3 w-3" />
               </button>
             </span>
@@ -213,11 +206,7 @@ function MembershipPicker({
           <div className="border-t px-3 py-2 flex items-center justify-between text-xs text-muted-foreground bg-muted/30">
             <span>{selected.length} selected</span>
             {selected.length > 0 && (
-              <button
-                type="button"
-                onClick={() => onChange([])}
-                className="hover:text-foreground"
-              >
+              <button type="button" onClick={() => onChange([])} className="hover:text-foreground">
                 Clear all
               </button>
             )}
@@ -251,13 +240,11 @@ export function DiscountForm() {
 
   const mutation = useMutation({
     mutationFn: async () => {
-      const membershipNames = MEMBERSHIPS.filter((m) =>
-        membershipIds.includes(m.id),
-      ).map((m) => m.name);
+      const membershipNames = MEMBERSHIPS.filter((m) => membershipIds.includes(m.id)).map(
+        (m) => m.name,
+      );
 
-      const expiresIso = expiresAt
-        ? new Date(expiresAt).toISOString()
-        : null;
+      const expiresIso = expiresAt ? new Date(expiresAt).toISOString() : null;
 
       return submit({
         data: {
@@ -265,15 +252,10 @@ export function DiscountForm() {
           discountType,
           discountValue: Number(discountValue),
           usageLimitType,
-          usageAmount:
-            usageLimitType === "limited" && usageAmount
-              ? Number(usageAmount)
-              : null,
+          usageAmount: usageLimitType === "limited" && usageAmount ? Number(usageAmount) : null,
           renewalLimitType,
           renewalsCount:
-            renewalLimitType === "limited" && renewalsCount
-              ? Number(renewalsCount)
-              : null,
+            renewalLimitType === "limited" && renewalsCount ? Number(renewalsCount) : null,
           expiresAt: expiresIso,
           appliesTo,
           membershipIds: appliesTo === "specific" ? membershipIds : [],
@@ -288,14 +270,22 @@ export function DiscountForm() {
       });
     },
     onSuccess: (res) => {
-      toast.success(`Request submitted`, {
-        description: `Approval email sent for code ${res.code}.`,
-      });
+      if (res.emailSent === false) {
+        toast.warning("Request saved, approval email not sent", {
+          description: res.emailError
+            ? `Code ${res.code}: ${res.emailError}`
+            : `Code ${res.code} was saved, but email delivery failed.`,
+        });
+      } else {
+        toast.success(`Request submitted`, {
+          description: `Approval email sent for code ${res.code}.`,
+        });
+      }
       navigate({ to: "/requests" });
     },
-    onError: (e: any) => {
+    onError: (e: unknown) => {
       toast.error("Could not submit request", {
-        description: e?.message ?? String(e),
+        description: e instanceof Error ? e.message : String(e),
       });
     },
   });
@@ -438,10 +428,7 @@ export function DiscountForm() {
           />
           {appliesTo === "specific" && (
             <div className="mt-3">
-              <MembershipPicker
-                selected={membershipIds}
-                onChange={setMembershipIds}
-              />
+              <MembershipPicker selected={membershipIds} onChange={setMembershipIds} />
             </div>
           )}
         </div>
@@ -537,18 +524,10 @@ export function DiscountForm() {
       </div>
 
       <div className="flex items-center justify-end gap-3 pb-12">
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={() => navigate({ to: "/requests" })}
-        >
+        <Button type="button" variant="ghost" onClick={() => navigate({ to: "/requests" })}>
           Discard
         </Button>
-        <Button
-          type="submit"
-          disabled={mutation.isPending}
-          className="min-w-[180px]"
-        >
+        <Button type="submit" disabled={mutation.isPending} className="min-w-[180px]">
           {mutation.isPending ? "Submitting…" : "Submit for approval"}
         </Button>
       </div>

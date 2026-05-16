@@ -1,7 +1,32 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import type { Tables } from "@/integrations/supabase/types";
 
 const MOMENCE_HOST_ID = 13752;
+
+type DiscountRequestRow = Tables<"discount_requests">;
+
+type MomencePayload = {
+  type: "percentage" | "fixed";
+  discountPercentage: number | null;
+  discountValue: number | null;
+  code: string;
+  description: string;
+  isUnlimited: boolean;
+  usageAmount: number | null;
+  usageAmountGlobal: null;
+  numberOfRenewalsDiscountIsValidFor: number | null;
+  expiresAt: string | null;
+  isUsableForGiftCards: false;
+  isNewCustomersOnly: false;
+  assignedEvents: [];
+  assignedSessionTemplates: [];
+  assignedProducts: [];
+  assignedVideos: [];
+  assignedAppointmentServices: [];
+  assignedCourses: [];
+  assignedMemberships: number[];
+};
 
 function page(opts: {
   title: string;
@@ -30,7 +55,11 @@ function html(body: string, status = 200) {
   });
 }
 
-async function callMomence(payload: any) {
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function callMomence(payload: MomencePayload) {
   const cookie = process.env.MOMENCE_COOKIE;
   if (!cookie) throw new Error("MOMENCE_COOKIE not configured");
   const res = await fetch(
@@ -52,7 +81,7 @@ async function callMomence(payload: any) {
     },
   );
   const text = await res.text();
-  let json: any = null;
+  let json: unknown = null;
   try {
     json = text ? JSON.parse(text) : null;
   } catch {
@@ -61,8 +90,37 @@ async function callMomence(payload: any) {
   return { ok: res.ok, status: res.status, body: json };
 }
 
-function buildMomencePayload(row: any) {
+function normalizeMembershipIds(value: unknown) {
+  if (!Array.isArray(value)) return [];
+
+  return value.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0);
+}
+
+function formatMomenceExpiresAt(value: string | null | undefined) {
+  if (!value) return null;
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+
+  const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${byType.year}-${byType.month}-${byType.day}T${byType.hour}:${byType.minute}:${byType.second}+05:30`;
+}
+
+function buildMomencePayload(row: DiscountRequestRow): MomencePayload {
   const isPct = row.discount_type === "percentage";
+  const membershipIds = normalizeMembershipIds(row.membership_ids);
+
   return {
     type: isPct ? "percentage" : "fixed",
     discountPercentage: isPct ? Number(row.discount_value) : null,
@@ -74,7 +132,7 @@ function buildMomencePayload(row: any) {
     usageAmountGlobal: null,
     numberOfRenewalsDiscountIsValidFor:
       row.renewal_limit_type === "limited" ? row.renewals_count : null,
-    expiresAt: row.expires_at,
+    expiresAt: formatMomenceExpiresAt(row.expires_at),
     isUsableForGiftCards: false,
     isNewCustomersOnly: false,
     assignedEvents: [],
@@ -83,7 +141,7 @@ function buildMomencePayload(row: any) {
     assignedVideos: [],
     assignedAppointmentServices: [],
     assignedCourses: [],
-    assignedMemberships: row.applies_to === "specific" ? row.membership_ids : [],
+    assignedMemberships: membershipIds.length > 0 ? membershipIds : [],
   };
 }
 
@@ -117,8 +175,7 @@ export const Route = createFileRoute("/api/public/discount/decision")({
           return html(
             page({
               title: "Request not found",
-              message:
-                "This link is invalid or has expired. The request may have been deleted.",
+              message: "This link is invalid or has expired. The request may have been deleted.",
               status: "error",
             }),
             404,
@@ -190,19 +247,19 @@ export const Route = createFileRoute("/api/public/discount/decision")({
               status: "ok",
             }),
           );
-        } catch (e: any) {
+        } catch (e: unknown) {
           await supabaseAdmin
             .from("discount_requests")
             .update({
               status: "failed",
-              error_message: e?.message ?? String(e),
+              error_message: errorMessage(e),
             })
             .eq("id", row.id);
           return html(
             page({
               title: "Failed to create code",
               message: "The Momence API call failed.",
-              detail: e?.message ?? String(e),
+              detail: errorMessage(e),
               status: "error",
             }),
             500,
