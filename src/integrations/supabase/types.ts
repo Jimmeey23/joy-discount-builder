@@ -14,7 +14,93 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      discount_requests: {
+        Row: {
+          applies_to: string
+          approve_token: string
+          approved_at: string | null
+          associate_name: string
+          code: string
+          created_at: string
+          description: string | null
+          discount_type: string
+          discount_value: number
+          error_message: string | null
+          expires_at: string | null
+          id: string
+          location: string
+          membership_ids: number[]
+          membership_names: string[]
+          momence_response: Json | null
+          notes: string | null
+          reason: string
+          reject_token: string
+          renewal_limit_type: string
+          renewals_count: number | null
+          requested_by: string | null
+          status: Database["public"]["Enums"]["discount_status"]
+          updated_at: string
+          usage_amount: number | null
+          usage_limit_type: string
+        }
+        Insert: {
+          applies_to: string
+          approve_token?: string
+          approved_at?: string | null
+          associate_name: string
+          code: string
+          created_at?: string
+          description?: string | null
+          discount_type: string
+          discount_value: number
+          error_message?: string | null
+          expires_at?: string | null
+          id?: string
+          location: string
+          membership_ids?: number[]
+          membership_names?: string[]
+          momence_response?: Json | null
+          notes?: string | null
+          reason: string
+          reject_token?: string
+          renewal_limit_type: string
+          renewals_count?: number | null
+          requested_by?: string | null
+          status?: Database["public"]["Enums"]["discount_status"]
+          updated_at?: string
+          usage_amount?: number | null
+          usage_limit_type: string
+        }
+        Update: {
+          applies_to?: string
+          approve_token?: string
+          approved_at?: string | null
+          associate_name?: string
+          code?: string
+          created_at?: string
+          description?: string | null
+          discount_type?: string
+          discount_value?: number
+          error_message?: string | null
+          expires_at?: string | null
+          id?: string
+          location?: string
+          membership_ids?: number[]
+          membership_names?: string[]
+          momence_response?: Json | null
+          notes?: string | null
+          reason?: string
+          reject_token?: string
+          renewal_limit_type?: string
+          renewals_count?: number | null
+          requested_by?: string | null
+          status?: Database["public"]["Enums"]["discount_status"]
+          updated_at?: string
+          usage_amount?: number | null
+          usage_limit_type?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
@@ -23,7 +109,7 @@ export type Database = {
       [_ in never]: never
     }
     Enums: {
-      [_ in never]: never
+      discount_status: "pending" | "approved" | "rejected" | "failed"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +236,8 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      discount_status: ["pending", "approved", "rejected", "failed"],
+    },
   },
 } as const
