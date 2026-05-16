@@ -41,7 +41,7 @@ function getBaseUrl() {
   try {
     const proto = getRequestHeader("x-forwarded-proto") || "https";
     const host = getRequestHost();
-    if (host && !/^(localhost|127\.0\.0\.1|0\.0\.0\.0)/i.test(host)) {
+    if (host) {
       return `${proto}://${host}`;
     }
   } catch {
