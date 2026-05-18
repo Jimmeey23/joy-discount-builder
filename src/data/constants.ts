@@ -26,16 +26,16 @@ export const LOCATIONS = [
 ] as const;
 
 export const DISCOUNT_REASONS = [
-  "New member onboarding offer",
+  "New client offer",
   "Referral reward",
-  "Customer retention / win-back",
+  "Lapsed member win-back",
   "Service recovery / complaint resolution",
   "Corporate partnership",
   "Influencer / collaboration",
   "Seasonal promotion",
-  "Staff / friends & family",
-  "Event-specific discount",
-  "Trial conversion incentive",
+  "Discount on Annual/6 Months/Bulk Priavtes",
+  "Students Offer",
+  "Current Month Promotion",
   "Other (see notes)",
 ] as const;
 
