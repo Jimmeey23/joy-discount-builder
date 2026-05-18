@@ -7,6 +7,10 @@ import type { Tables } from "@/integrations/supabase/types";
 const APPROVAL_EMAIL = "jimmeey@physique57india.com";
 const MOMENCE_HOST_ID = 13752;
 const OTHER_REASON = "Other (see notes)";
+const hasMaxTwoDecimals = (value: number) => {
+  const [, decimals = ""] = value.toString().split(".");
+  return decimals.length <= 2;
+};
 type DiscountRequestRow = Tables<"discount_requests">;
 
 const SubmitSchema = z
@@ -35,6 +39,14 @@ const SubmitSchema = z
     requestedBy: z.string().max(100).optional().nullable(),
   })
   .superRefine((data, ctx) => {
+    if (!hasMaxTwoDecimals(data.discountValue)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Discount value can have up to 2 decimal places",
+        path: ["discountValue"],
+      });
+    }
+
     if (data.reason === OTHER_REASON && !data.notes?.trim()) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

@@ -25,6 +25,7 @@ type DiscountType = "percentage" | "fixed";
 type LimitType = "unlimited" | "limited";
 type AppliesTo = "everything" | "specific";
 const OTHER_REASON = "Other (see notes)";
+const TWO_DECIMAL_VALUE = /^\d+(\.\d{1,2})?$/;
 
 function Segmented<T extends string>({
   value,
@@ -296,6 +297,8 @@ export function DiscountForm() {
     if (!code.trim()) return toast.error("Please enter a discount code");
     if (!discountValue || Number(discountValue) <= 0)
       return toast.error("Please enter a discount value");
+    if (!TWO_DECIMAL_VALUE.test(discountValue))
+      return toast.error("Discount value can have up to 2 decimal places");
     if (discountType === "percentage" && Number(discountValue) > 100)
       return toast.error("Percentage cannot exceed 100");
     if (!expiresAt) return toast.error("Please select an expiration date");
@@ -347,7 +350,7 @@ export function DiscountForm() {
               <Input
                 type="number"
                 min="0"
-                step={discountType === "percentage" ? "1" : "0.01"}
+                step="0.01"
                 value={discountValue}
                 onChange={(e) => setDiscountValue(e.target.value)}
                 placeholder="0"
