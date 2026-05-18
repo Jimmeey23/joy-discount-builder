@@ -6,32 +6,43 @@ import type { Tables } from "@/integrations/supabase/types";
 
 const APPROVAL_EMAIL = "jimmeey@physique57india.com";
 const MOMENCE_HOST_ID = 13752;
+const OTHER_REASON = "Other (see notes)";
 type DiscountRequestRow = Tables<"discount_requests">;
 
-const SubmitSchema = z.object({
-  code: z
-    .string()
-    .trim()
-    .min(1)
-    .max(64)
-    .regex(/^[A-Za-z0-9_$@!-]+$/),
-  discountType: z.enum(["percentage", "fixed"]),
-  discountValue: z.number().min(0).max(1000000),
-  usageLimitType: z.enum(["unlimited", "limited"]),
-  usageAmount: z.number().int().min(1).max(1000000).nullable().optional(),
-  renewalLimitType: z.enum(["unlimited", "limited"]),
-  renewalsCount: z.number().int().min(1).max(1000).nullable().optional(),
-  expiresAt: z.string().nullable().optional(),
-  appliesTo: z.enum(["everything", "specific"]),
-  membershipIds: z.array(z.number().int()).max(500),
-  membershipNames: z.array(z.string()).max(500),
-  associateName: z.string().min(1).max(100),
-  location: z.string().min(1).max(200),
-  reason: z.string().min(1).max(200),
-  notes: z.string().max(2000).optional().nullable(),
-  description: z.string().max(500).optional().nullable(),
-  requestedBy: z.string().max(100).optional().nullable(),
-});
+const SubmitSchema = z
+  .object({
+    code: z
+      .string()
+      .trim()
+      .min(1)
+      .max(64)
+      .regex(/^[A-Za-z0-9_$@!-]+$/),
+    discountType: z.enum(["percentage", "fixed"]),
+    discountValue: z.number().min(0.01).max(1000000),
+    usageLimitType: z.enum(["unlimited", "limited"]),
+    usageAmount: z.number().int().min(1).max(1000000).nullable().optional(),
+    renewalLimitType: z.enum(["unlimited", "limited"]),
+    renewalsCount: z.number().int().min(1).max(1000).nullable().optional(),
+    expiresAt: z.string().trim().min(1),
+    appliesTo: z.enum(["everything", "specific"]),
+    membershipIds: z.array(z.number().int()).max(500),
+    membershipNames: z.array(z.string()).max(500),
+    associateName: z.string().trim().min(1).max(100),
+    location: z.string().min(1).max(200),
+    reason: z.string().trim().min(1).max(200),
+    notes: z.string().max(2000).optional().nullable(),
+    description: z.string().max(500).optional().nullable(),
+    requestedBy: z.string().max(100).optional().nullable(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.reason === OTHER_REASON && !data.notes?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Notes are required when reason is Other",
+        path: ["notes"],
+      });
+    }
+  });
 
 const STABLE_PUBLIC_URL = "https://project--5d498845-315c-4003-af46-2a005cd23f71.lovable.app";
 

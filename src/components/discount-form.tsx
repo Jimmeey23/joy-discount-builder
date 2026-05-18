@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils";
 type DiscountType = "percentage" | "fixed";
 type LimitType = "unlimited" | "limited";
 type AppliesTo = "everything" | "specific";
+const OTHER_REASON = "Other (see notes)";
 
 function Segmented<T extends string>({
   value,
@@ -297,6 +298,7 @@ export function DiscountForm() {
       return toast.error("Please enter a discount value");
     if (discountType === "percentage" && Number(discountValue) > 100)
       return toast.error("Percentage cannot exceed 100");
+    if (!expiresAt) return toast.error("Please select an expiration date");
     if (usageLimitType === "limited" && !usageAmount)
       return toast.error("Please specify usage limit");
     if (renewalLimitType === "limited" && !renewalsCount)
@@ -306,6 +308,8 @@ export function DiscountForm() {
     if (!associateName) return toast.error("Please select an associate");
     if (!location) return toast.error("Please select a location");
     if (!reason) return toast.error("Please select a reason");
+    if (reason === OTHER_REASON && !notes.trim())
+      return toast.error("Please add notes when reason is Other");
     mutation.mutate();
   }
 
@@ -319,6 +323,7 @@ export function DiscountForm() {
             onChange={(e) => setCode(e.target.value.toUpperCase())}
             placeholder="FREE20"
             className="font-mono uppercase"
+            required
           />
         </div>
 
@@ -347,6 +352,7 @@ export function DiscountForm() {
                 onChange={(e) => setDiscountValue(e.target.value)}
                 placeholder="0"
                 className="pr-10"
+                required
               />
               <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
                 {discountType === "percentage" ? "%" : "₹"}
@@ -406,11 +412,12 @@ export function DiscountForm() {
         </div>
 
         <div>
-          <FieldLabel hint="Leave blank for no expiration.">Expiration</FieldLabel>
+          <FieldLabel>Expiration</FieldLabel>
           <Input
             type="datetime-local"
             value={expiresAt}
             onChange={(e) => setExpiresAt(e.target.value)}
+            required
           />
         </div>
 
@@ -458,7 +465,7 @@ export function DiscountForm() {
           <div>
             <FieldLabel>Associate</FieldLabel>
             <Select value={associateName} onValueChange={setAssociateName}>
-              <SelectTrigger>
+              <SelectTrigger aria-required="true">
                 <SelectValue placeholder="Select associate" />
               </SelectTrigger>
               <SelectContent>
@@ -490,7 +497,7 @@ export function DiscountForm() {
         <div>
           <FieldLabel>Reason for discount</FieldLabel>
           <Select value={reason} onValueChange={setReason}>
-            <SelectTrigger>
+            <SelectTrigger aria-required="true">
               <SelectValue placeholder="Select a reason" />
             </SelectTrigger>
             <SelectContent>
@@ -504,12 +511,15 @@ export function DiscountForm() {
         </div>
 
         <div>
-          <FieldLabel>Notes for approver</FieldLabel>
+          <FieldLabel>
+            Notes for approver{reason === OTHER_REASON ? " (required for Other)" : ""}
+          </FieldLabel>
           <Textarea
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             placeholder="Context, customer details, special circumstances…"
             rows={3}
+            required={reason === OTHER_REASON}
           />
         </div>
 
