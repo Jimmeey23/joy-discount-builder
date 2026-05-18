@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import type { Tables } from "@/integrations/supabase/types";
 
 const MOMENCE_HOST_ID = 13752;
+const STATUS_NOTIFICATION_EMAIL = "info@physique57india.com";
 
 type DiscountRequestRow = Tables<"discount_requests">;
 
@@ -57,6 +58,113 @@ function html(body: string, status = 200) {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function escapeHtml(s: string) {
+  return s.replace(
+    /[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!,
+  );
+}
+
+async function sendMailtrap(opts: { to: string; subject: string; html: string; text: string }) {
+  const token = process.env.MAILTRAP_API_TOKEN;
+  const sender = process.env.MAILTRAP_SENDER_EMAIL;
+  if (!token) throw new Error("MAILTRAP_API_TOKEN is not configured");
+  if (!sender) throw new Error("MAILTRAP_SENDER_EMAIL is not configured");
+
+  const res = await fetch("https://send.api.mailtrap.io/api/send", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from: { email: sender, name: "Momence Discount Approvals" },
+      to: [{ email: opts.to }],
+      subject: opts.subject,
+      html: opts.html,
+      text: opts.text,
+      category: "discount-status",
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Mailtrap send failed [${res.status}]: ${body}`);
+  }
+  return res.json();
+}
+
+function buildStatusEmail(row: DiscountRequestRow, status: "approved" | "rejected") {
+  const statusLabel = status === "approved" ? "Approved" : "Rejected";
+  const valueDisplay =
+    row.discount_type === "percentage" ? `${row.discount_value}%` : `₹${row.discount_value}`;
+  const expiryDisplay = row.expires_at
+    ? new Date(row.expires_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
+    : "No expiration";
+  const rows: Array<[string, string]> = [
+    ["Status", statusLabel],
+    ["Discount code", row.code],
+    ["Value", valueDisplay],
+    ["Expiration", expiryDisplay],
+    ["Associate", row.associate_name],
+    ["Location", row.location],
+    ["Reason", row.reason],
+  ];
+  if (row.notes) rows.push(["Notes", row.notes]);
+  if (row.requested_by) rows.push(["Requested by", row.requested_by]);
+
+  const tableRows = rows
+    .map(
+      ([k, v]) =>
+        `<tr><td style="padding:8px 12px;color:#64748b;font-size:13px;border-bottom:1px solid #f1f5f9;vertical-align:top;width:140px;">${escapeHtml(
+          k,
+        )}</td><td style="padding:8px 12px;color:#0f172a;font-size:14px;border-bottom:1px solid #f1f5f9;">${escapeHtml(
+          String(v),
+        )}</td></tr>`,
+    )
+    .join("");
+
+  const html = `<!doctype html>
+<html><body style="margin:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <div style="max-width:620px;margin:0 auto;padding:32px 16px;">
+    <div style="background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e2e8f0;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+      <div style="background:${status === "approved" ? "#10b981" : "#64748b"};padding:24px 32px;">
+        <div style="color:rgba(255,255,255,0.85);font-size:12px;letter-spacing:0.08em;text-transform:uppercase;font-weight:600;">Momence · Discount status</div>
+        <h1 style="color:#fff;margin:8px 0 0;font-size:22px;font-weight:700;">Discount request ${statusLabel.toLowerCase()}</h1>
+      </div>
+      <div style="padding:24px 32px;">
+        <p style="margin:0 0 18px;color:#334155;font-size:14px;line-height:1.6;">
+          The discount request decision has been recorded.
+        </p>
+        <table style="width:100%;border-collapse:collapse;border:1px solid #f1f5f9;border-radius:8px;overflow:hidden;">
+          ${tableRows}
+        </table>
+      </div>
+    </div>
+    <p style="text-align:center;color:#94a3b8;font-size:11px;margin-top:16px;">Sent by the Momence Discount Approvals app.</p>
+  </div>
+</body></html>`;
+
+  const text = `Discount request ${status}
+
+${rows.map(([k, v]) => `${k}: ${v}`).join("\n")}`;
+
+  return {
+    subject: `[${statusLabel}] Discount code ${row.code}`,
+    html,
+    text,
+  };
+}
+
+async function notifyStatus(row: DiscountRequestRow, status: "approved" | "rejected") {
+  const message = buildStatusEmail(row, status);
+  await sendMailtrap({
+    to: STATUS_NOTIFICATION_EMAIL,
+    subject: message.subject,
+    html: message.html,
+    text: message.text,
+  });
 }
 
 async function callMomence(payload: MomencePayload) {
@@ -197,6 +305,11 @@ export const Route = createFileRoute("/api/public/discount/decision")({
             .from("discount_requests")
             .update({ status: "rejected" })
             .eq("id", row.id);
+          try {
+            await notifyStatus(row, "rejected");
+          } catch (e: unknown) {
+            console.error("Status notification email failed", e);
+          }
           return html(
             page({
               title: "Request rejected",
@@ -239,6 +352,11 @@ export const Route = createFileRoute("/api/public/discount/decision")({
               momence_response: result.body,
             })
             .eq("id", row.id);
+          try {
+            await notifyStatus(row, "approved");
+          } catch (e: unknown) {
+            console.error("Status notification email failed", e);
+          }
 
           return html(
             page({
