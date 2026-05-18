@@ -1,20 +1,17 @@
 export const ASSOCIATES = [
   "Akshay Rane",
   "Zaheer Agarbattiwala",
-  "Zahur Shaikh",
+  "Vahishta Fitter",
   "Tahira Sayyed",
-  "Imran Shaikh",
-  "Deesha Changwani",
-  "Admin Admin",
-  "Nadiya Shaikh",
-  "Shipra Bhika",
-  "Manisha Rathod",
   "Sheetal Kataria",
-  "Priyanka Abnave",
+  "Imran Shaikh",
+  "Deesha Changwani",  
+  "Nadiya Shaikh",
+  "Shipra Bhika",  
   "Prathap Kp",
   "Api Serou",
-  "Pavanthika",
-  "Santhosh Kumar",
+  "Sashi Singh",
+  "Yashas S.",
 ] as const;
 
 export const LOCATIONS = [
