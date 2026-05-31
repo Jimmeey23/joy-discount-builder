@@ -8,7 +8,7 @@ const STATUS_NOTIFICATION_EMAIL = "info@physique57india.com";
 type DiscountRequestRow = Tables<"discount_requests">;
 
 type MomencePayload = {
-  type: "percentage" | "fixed";
+  type: "percentage" | "value";
   discountPercentage: number | null;
   discountValue: number | null;
   code: string;
@@ -225,12 +225,12 @@ function formatMomenceExpiresAt(value: string | null | undefined) {
   return `${byType.year}-${byType.month}-${byType.day}T${byType.hour}:${byType.minute}:${byType.second}+05:30`;
 }
 
-function buildMomencePayload(row: DiscountRequestRow): MomencePayload {
+export function buildMomencePayload(row: DiscountRequestRow): MomencePayload {
   const isPct = row.discount_type === "percentage";
   const membershipIds = normalizeMembershipIds(row.membership_ids);
 
   return {
-    type: isPct ? "percentage" : "fixed",
+    type: isPct ? "percentage" : "value",
     discountPercentage: isPct ? Number(row.discount_value) : null,
     discountValue: isPct ? null : Number(row.discount_value),
     code: row.code,
