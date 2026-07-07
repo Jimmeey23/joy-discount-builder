@@ -329,6 +329,11 @@ function PaymentLinksPage() {
                   : "Could not load Stripe products"}
               </div>
             )}
+            {catalog.data?.promoLoadError && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                Products loaded, but promo codes could not be loaded: {catalog.data.promoLoadError}
+              </div>
+            )}
             {lineItems.map((item, index) => (
               <div key={index} className="grid gap-3 md:grid-cols-[1fr_120px_80px]">
                 <Select

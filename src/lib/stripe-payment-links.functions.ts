@@ -220,7 +220,7 @@ async function buildPaymentLinkRequestPayload(
 
 export const listStripeCatalog = createServerFn({ method: "GET" }).handler(async () => {
   const stripe = await stripeClient();
-  const [prices, promotionCodes] = await Promise.all([
+  const [pricesResult, promotionCodesResult] = await Promise.allSettled([
     stripe.prices.list({
       active: true,
       limit: 100,
@@ -232,6 +232,14 @@ export const listStripeCatalog = createServerFn({ method: "GET" }).handler(async
       expand: ["data.coupon"],
     }),
   ]);
+
+  if (pricesResult.status === "rejected") {
+    throw new Error(`Stripe products failed: ${errorMessage(pricesResult.reason)}`);
+  }
+
+  const prices = pricesResult.value;
+  const promotionCodes =
+    promotionCodesResult.status === "fulfilled" ? promotionCodesResult.value.data : [];
 
   return {
     products: prices.data
@@ -247,14 +255,24 @@ export const listStripeCatalog = createServerFn({ method: "GET" }).handler(async
           ? `${price.recurring.interval_count} ${price.recurring.interval}`
           : null,
       })),
-    promotionCodes: promotionCodes.data.map((code) => ({
-      id: code.id,
-      code: code.code,
-      couponId: code.coupon.id,
-      label: code.coupon.percent_off
-        ? `${code.code} · ${code.coupon.percent_off}% off`
-        : `${code.code} · ${money(code.coupon.amount_off ?? 0, code.coupon.currency ?? "inr")} off`,
-    })),
+    promotionCodes: promotionCodes.flatMap((code) => {
+      const coupon = code.coupon;
+      if (!coupon || typeof coupon !== "object" || "deleted" in coupon) {
+        return [];
+      }
+      return [
+        {
+          id: code.id,
+          code: code.code,
+          couponId: coupon.id,
+          label: coupon.percent_off
+            ? `${code.code} · ${coupon.percent_off}% off`
+            : `${code.code} · ${money(coupon.amount_off ?? 0, coupon.currency ?? "inr")} off`,
+        },
+      ];
+    }),
+    promoLoadError:
+      promotionCodesResult.status === "rejected" ? errorMessage(promotionCodesResult.reason) : null,
   };
 });
 
