@@ -1,10 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { useMutation } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { Check, ChevronDown, Search, X } from "lucide-react";
-import { submitDiscountRequest } from "@/lib/discount.functions";
+import { submitDiscountRequest, updateDiscountRequest } from "@/lib/discount.functions";
+import type { Tables } from "@/integrations/supabase/types";
 import { MEMBERSHIPS } from "@/data/memberships";
 import { ASSOCIATES, LOCATIONS, DISCOUNT_REASONS } from "@/data/constants";
 import { Input } from "@/components/ui/input";
@@ -24,6 +25,7 @@ import { cn } from "@/lib/utils";
 type DiscountType = "percentage" | "fixed";
 type LimitType = "unlimited" | "limited";
 type AppliesTo = "everything" | "specific";
+type DiscountRequestRow = Tables<"discount_requests">;
 const OTHER_REASON = "Other (see notes)";
 const TWO_DECIMAL_VALUE = /^\d+(\.\d{1,2})?$/;
 
@@ -219,9 +221,19 @@ function MembershipPicker({
   );
 }
 
-export function DiscountForm() {
+function toDatetimeLocal(value: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const offsetMs = date.getTime() - date.getTimezoneOffset() * 60_000;
+  return new Date(offsetMs).toISOString().slice(0, 16);
+}
+
+export function DiscountForm({ initialRequest }: { initialRequest?: DiscountRequestRow }) {
   const navigate = useNavigate();
   const submit = useServerFn(submitDiscountRequest);
+  const update = useServerFn(updateDiscountRequest);
+  const isEdit = Boolean(initialRequest);
 
   const [code, setCode] = useState("");
   const [discountType, setDiscountType] = useState<DiscountType>("percentage");
@@ -240,6 +252,26 @@ export function DiscountForm() {
   const [description, setDescription] = useState<string>("");
   const [requestedBy, setRequestedBy] = useState<string>("");
 
+  useEffect(() => {
+    if (!initialRequest) return;
+    setCode(initialRequest.code);
+    setDiscountType(initialRequest.discount_type === "fixed" ? "fixed" : "percentage");
+    setDiscountValue(String(initialRequest.discount_value));
+    setUsageLimitType(initialRequest.usage_limit_type === "limited" ? "limited" : "unlimited");
+    setUsageAmount(initialRequest.usage_amount ? String(initialRequest.usage_amount) : "");
+    setRenewalLimitType(initialRequest.renewal_limit_type === "limited" ? "limited" : "unlimited");
+    setRenewalsCount(initialRequest.renewals_count ? String(initialRequest.renewals_count) : "");
+    setExpiresAt(toDatetimeLocal(initialRequest.expires_at));
+    setAppliesTo(initialRequest.applies_to === "specific" ? "specific" : "everything");
+    setMembershipIds(initialRequest.membership_ids ?? []);
+    setAssociateName(initialRequest.associate_name);
+    setLocation(initialRequest.location);
+    setReason(initialRequest.reason);
+    setNotes(initialRequest.notes ?? "");
+    setDescription(initialRequest.description ?? "");
+    setRequestedBy(initialRequest.requested_by ?? "");
+  }, [initialRequest]);
+
   const mutation = useMutation({
     mutationFn: async () => {
       const membershipNames = MEMBERSHIPS.filter((m) => membershipIds.includes(m.id)).map(
@@ -248,45 +280,58 @@ export function DiscountForm() {
 
       const expiresIso = expiresAt ? new Date(expiresAt).toISOString() : null;
 
-      return submit({
-        data: {
-          code: code.trim(),
-          discountType,
-          discountValue: Number(discountValue),
-          usageLimitType,
-          usageAmount: usageLimitType === "limited" && usageAmount ? Number(usageAmount) : null,
-          renewalLimitType,
-          renewalsCount:
-            renewalLimitType === "limited" && renewalsCount ? Number(renewalsCount) : null,
-          expiresAt: expiresIso,
-          appliesTo,
-          membershipIds: appliesTo === "specific" ? membershipIds : [],
-          membershipNames: appliesTo === "specific" ? membershipNames : [],
-          associateName,
-          location,
-          reason,
-          notes: notes || null,
-          description: description || null,
-          requestedBy: requestedBy || null,
-        },
-      });
+      const data = {
+        code: code.trim(),
+        discountType,
+        discountValue: Number(discountValue),
+        usageLimitType,
+        usageAmount: usageLimitType === "limited" && usageAmount ? Number(usageAmount) : null,
+        renewalLimitType,
+        renewalsCount:
+          renewalLimitType === "limited" && renewalsCount ? Number(renewalsCount) : null,
+        expiresAt: expiresIso,
+        appliesTo,
+        membershipIds: appliesTo === "specific" ? membershipIds : [],
+        membershipNames: appliesTo === "specific" ? membershipNames : [],
+        associateName,
+        location,
+        reason,
+        notes: notes || null,
+        description: description || null,
+        requestedBy: requestedBy || null,
+      };
+
+      if (initialRequest) {
+        return update({ data: { ...data, id: initialRequest.id } });
+      }
+
+      return submit({ data });
     },
     onSuccess: (res) => {
-      if (res.emailSent === false) {
+      const result = res as {
+        code: string;
+        emailSent?: boolean;
+        emailError?: string;
+      };
+      if (isEdit) {
+        toast.success("Request updated", {
+          description: `Code ${result.code} can still be approved from the original approval link.`,
+        });
+      } else if (result.emailSent === false) {
         toast.warning("Request saved, approval email not sent", {
-          description: res.emailError
-            ? `Code ${res.code}: ${res.emailError}`
-            : `Code ${res.code} was saved, but email delivery failed.`,
+          description: result.emailError
+            ? `Code ${result.code}: ${result.emailError}`
+            : `Code ${result.code} was saved, but email delivery failed.`,
         });
       } else {
-        toast.success(`Request submitted`, {
-          description: `Approval email sent for code ${res.code}.`,
+        toast.success("Request submitted", {
+          description: `Approval email sent for code ${result.code}.`,
         });
       }
       navigate({ to: "/requests" });
     },
     onError: (e: unknown) => {
-      toast.error("Could not submit request", {
+      toast.error(isEdit ? "Could not update request" : "Could not submit request", {
         description: e instanceof Error ? e.message : String(e),
       });
     },
@@ -541,7 +586,13 @@ export function DiscountForm() {
           Discard
         </Button>
         <Button type="submit" disabled={mutation.isPending} className="min-w-[180px]">
-          {mutation.isPending ? "Submitting…" : "Submit for approval"}
+          {mutation.isPending
+            ? isEdit
+              ? "Saving..."
+              : "Submitting..."
+            : isEdit
+              ? "Save changes"
+              : "Submit for approval"}
         </Button>
       </div>
     </form>

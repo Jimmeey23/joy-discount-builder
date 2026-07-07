@@ -4,6 +4,22 @@ import { useQuery } from "@tanstack/react-query";
 import { listDiscountRequests } from "@/lib/discount.functions";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import type { Tables } from "@/integrations/supabase/types";
+
+type RequestListRow = Pick<
+  Tables<"discount_requests">,
+  | "id"
+  | "code"
+  | "status"
+  | "discount_type"
+  | "discount_value"
+  | "applies_to"
+  | "membership_names"
+  | "associate_name"
+  | "location"
+  | "created_at"
+  | "error_message"
+>;
 
 export const Route = createFileRoute("/requests")({
   component: RequestsPage,
@@ -29,12 +45,8 @@ function RequestsPage() {
               %
             </div>
             <div>
-              <h1 className="text-base font-semibold leading-tight">
-                Momence Discount Codes
-              </h1>
-              <p className="text-xs text-muted-foreground">
-                Physique 57 India · approval workflow
-              </p>
+              <h1 className="text-base font-semibold leading-tight">Momence Discount Codes</h1>
+              <p className="text-xs text-muted-foreground">Physique 57 India · approval workflow</p>
             </div>
           </div>
           <nav className="flex items-center gap-1 text-sm">
@@ -61,8 +73,8 @@ function RequestsPage() {
           <div>
             <h2 className="text-3xl font-semibold tracking-tight">Discount requests</h2>
             <p className="mt-2 text-sm text-muted-foreground">
-              All submitted discount code requests and their current approval state.
-              Refreshes automatically.
+              All submitted discount code requests and their current approval state. Refreshes
+              automatically.
             </p>
           </div>
           <Link
@@ -96,10 +108,11 @@ function RequestsPage() {
                   <th className="text-left px-5 py-3 font-medium">Location</th>
                   <th className="text-left px-5 py-3 font-medium">Status</th>
                   <th className="text-right px-5 py-3 font-medium">Created</th>
+                  <th className="text-right px-5 py-3 font-medium">Action</th>
                 </tr>
               </thead>
               <tbody>
-                {data.requests.map((r: any) => (
+                {(data.requests as RequestListRow[]).map((r) => (
                   <tr key={r.id} className="border-t hover:bg-muted/30 transition">
                     <td className="px-5 py-3 font-mono font-medium">{r.code}</td>
                     <td className="px-5 py-3 text-muted-foreground">
@@ -112,16 +125,17 @@ function RequestsPage() {
                           : `${r.membership_names?.length ?? 0} memberships`}
                       </span>
                     </td>
-                    <td className="px-5 py-3 text-muted-foreground">
-                      {r.associate_name}
-                    </td>
+                    <td className="px-5 py-3 text-muted-foreground">{r.associate_name}</td>
                     <td className="px-5 py-3 text-muted-foreground truncate max-w-[180px]">
                       {r.location}
                     </td>
                     <td className="px-5 py-3">
                       <StatusBadge status={r.status} />
                       {r.error_message && (
-                        <div className="text-xs text-destructive mt-1 max-w-[240px] truncate" title={r.error_message}>
+                        <div
+                          className="text-xs text-destructive mt-1 max-w-[240px] truncate"
+                          title={r.error_message}
+                        >
                           {r.error_message}
                         </div>
                       )}
@@ -132,6 +146,19 @@ function RequestsPage() {
                         dateStyle: "medium",
                         timeStyle: "short",
                       })}
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      {r.status === "approved" ? (
+                        <span className="text-xs text-muted-foreground">Locked</span>
+                      ) : (
+                        <Link
+                          to="/requests/$requestId/edit"
+                          params={{ requestId: r.id }}
+                          className="text-xs font-medium text-primary hover:underline"
+                        >
+                          Edit
+                        </Link>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -147,7 +174,10 @@ function RequestsPage() {
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, { label: string; className: string }> = {
     pending: { label: "Pending", className: "bg-amber-100 text-amber-800 border-amber-200" },
-    approved: { label: "Approved", className: "bg-emerald-100 text-emerald-800 border-emerald-200" },
+    approved: {
+      label: "Approved",
+      className: "bg-emerald-100 text-emerald-800 border-emerald-200",
+    },
     rejected: { label: "Rejected", className: "bg-slate-100 text-slate-700 border-slate-200" },
     failed: { label: "Failed", className: "bg-red-100 text-red-800 border-red-200" },
   };

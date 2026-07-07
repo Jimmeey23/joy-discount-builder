@@ -29,6 +29,12 @@ type MomencePayload = {
   assignedMemberships: number[];
 };
 
+type MomenceDiscountMatch = {
+  code: string;
+  value: number;
+  expiresAt?: string | null;
+};
+
 function page(opts: {
   title: string;
   message: string;
@@ -54,6 +60,11 @@ function html(body: string, status = 200) {
     status,
     headers: { "content-type": "text/html; charset=utf-8" },
   });
+}
+
+function actionUrl(token: string, action: string, extra: Record<string, string> = {}) {
+  const params = new URLSearchParams({ token, action, ...extra });
+  return `/api/public/discount/decision?${params.toString()}`;
 }
 
 function errorMessage(error: unknown) {
@@ -198,6 +209,125 @@ async function callMomence(payload: MomencePayload) {
   return { ok: res.ok, status: res.status, body: json };
 }
 
+async function fetchMomenceDiscountCodes() {
+  const cookie = process.env.MOMENCE_COOKIE;
+  if (!cookie) throw new Error("MOMENCE_COOKIE not configured");
+  const res = await fetch(
+    `https://momence.com/_api/primary/host/${MOMENCE_HOST_ID}/discount-codes?includeExpired=false`,
+    {
+      headers: {
+        accept: "application/json, text/plain, */*",
+        cookie,
+        referer: `https://momence.com/dashboard/${MOMENCE_HOST_ID}/discount-codes`,
+        "user-agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+        "x-origin": `https://momence.com/dashboard/${MOMENCE_HOST_ID}/discount-codes`,
+      },
+    },
+  );
+  const text = await res.text();
+  let json: unknown = null;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch {
+    json = { raw: text };
+  }
+  if (!res.ok) {
+    throw new Error(`Momence discount list failed [${res.status}]: ${JSON.stringify(json)}`);
+  }
+  return json;
+}
+
+function candidateArrays(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (!value || typeof value !== "object") return [];
+  const obj = value as Record<string, unknown>;
+  for (const key of ["data", "discountCodes", "discount_codes", "items", "results"]) {
+    if (Array.isArray(obj[key])) return obj[key];
+  }
+  return [];
+}
+
+function numericField(obj: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = obj[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) {
+      return Number(value);
+    }
+  }
+  return null;
+}
+
+function findSameValueDiscounts(row: DiscountRequestRow, momenceResponse: unknown) {
+  const requestedType = row.discount_type === "percentage" ? "percentage" : "value";
+  const requestedValue = Number(row.discount_value);
+  const items = candidateArrays(momenceResponse);
+
+  return items.flatMap((item): MomenceDiscountMatch[] => {
+    if (!item || typeof item !== "object") return [];
+    const obj = item as Record<string, unknown>;
+    const itemType = String(obj.type ?? obj.discountType ?? "").toLowerCase();
+    const value =
+      requestedType === "percentage"
+        ? numericField(obj, ["discountPercentage", "discount_percentage", "percentage", "value"])
+        : numericField(obj, ["discountValue", "discount_value", "amount", "value"]);
+
+    const typeMatches =
+      requestedType === "percentage"
+        ? itemType === "" || itemType.includes("percentage")
+        : itemType === "" || itemType.includes("value") || itemType.includes("fixed");
+
+    if (!typeMatches || value === null || Math.abs(value - requestedValue) > 0.001) {
+      return [];
+    }
+
+    return [
+      {
+        code: String(obj.code ?? obj.name ?? "Existing discount code"),
+        value,
+        expiresAt: typeof obj.expiresAt === "string" ? obj.expiresAt : null,
+      },
+    ];
+  });
+}
+
+function duplicatePromptPage(
+  row: DiscountRequestRow,
+  token: string,
+  matches: MomenceDiscountMatch[],
+) {
+  const valueLabel =
+    row.discount_type === "percentage" ? `${row.discount_value}%` : `₹${row.discount_value}`;
+  const rows = matches
+    .map(
+      (match) =>
+        `<tr><td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${escapeHtml(match.code)}</td><td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;">${escapeHtml(valueLabel)}</td><td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;color:#64748b;">${escapeHtml(match.expiresAt ?? "No expiry shown")}</td></tr>`,
+    )
+    .join("");
+  const useExistingUrl = actionUrl(token, "use-existing", {
+    existingCode: matches[0]?.code ?? "",
+  });
+  const createUrl = actionUrl(token, "approve", { create: "1" });
+
+  return `<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Matching discount found</title></head>
+<body style="margin:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;">
+  <div style="background:#fff;border:1px solid #e2e8f0;border-radius:18px;padding:34px;max-width:680px;width:100%;box-shadow:0 4px 24px rgba(15,23,42,0.06);">
+    <div style="width:56px;height:56px;border-radius:50%;background:#6366f1;color:#fff;font-size:28px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-bottom:18px;">i</div>
+    <h1 style="margin:0 0 8px;font-size:22px;color:#0f172a;">Matching Momence discount found</h1>
+    <p style="margin:0 0 18px;color:#475569;font-size:14px;line-height:1.6;">Momence already has an active ${escapeHtml(valueLabel)} discount. Use an existing code where possible, or create a new code if this request needs a distinct code.</p>
+    <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;font-size:14px;">
+      <thead style="background:#f8fafc;color:#64748b;text-align:left;"><tr><th style="padding:10px 12px;">Code</th><th style="padding:10px 12px;">Value</th><th style="padding:10px 12px;">Expiry</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:24px;">
+      <a href="${useExistingUrl}" style="display:inline-block;background:#10b981;color:#fff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:600;font-size:14px;">Use existing code</a>
+      <a href="${createUrl}" style="display:inline-block;background:#fff;color:#0f172a;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:600;font-size:14px;border:1px solid #cbd5e1;">Create new code anyway</a>
+    </div>
+  </div>
+</body></html>`;
+}
+
 function normalizeMembershipIds(value: unknown) {
   if (!Array.isArray(value)) return [];
 
@@ -260,8 +390,9 @@ export const Route = createFileRoute("/api/public/discount/decision")({
         const url = new URL(request.url);
         const token = url.searchParams.get("token");
         const action = url.searchParams.get("action");
+        const createAnyway = url.searchParams.get("create") === "1";
 
-        if (!token || (action !== "approve" && action !== "reject")) {
+        if (!token || (action !== "approve" && action !== "reject" && action !== "use-existing")) {
           return html(
             page({
               title: "Invalid link",
@@ -272,7 +403,7 @@ export const Route = createFileRoute("/api/public/discount/decision")({
           );
         }
 
-        const column = action === "approve" ? "approve_token" : "reject_token";
+        const column = action === "reject" ? "reject_token" : "approve_token";
         const { data: row, error } = await supabaseAdmin
           .from("discount_requests")
           .select("*")
@@ -319,8 +450,45 @@ export const Route = createFileRoute("/api/public/discount/decision")({
           );
         }
 
+        if (action === "use-existing") {
+          const existingCode = url.searchParams.get("existingCode");
+          await supabaseAdmin
+            .from("discount_requests")
+            .update({
+              status: "approved",
+              approved_at: new Date().toISOString(),
+              momence_response: {
+                reusedExistingDiscount: true,
+                existingCode,
+              },
+            })
+            .eq("id", row.id);
+          try {
+            await notifyStatus(row, "approved");
+          } catch (e: unknown) {
+            console.error("Status notification email failed", e);
+          }
+          return html(
+            page({
+              title: "Approved using existing code",
+              message: existingCode
+                ? `Use existing Momence discount code "${existingCode}" for this request. No new code was created.`
+                : "Use an existing Momence discount code for this request. No new code was created.",
+              status: "ok",
+            }),
+          );
+        }
+
         // Approve → call Momence
         try {
+          if (!createAnyway) {
+            const existingDiscounts = await fetchMomenceDiscountCodes();
+            const sameValueMatches = findSameValueDiscounts(row, existingDiscounts);
+            if (sameValueMatches.length > 0) {
+              return html(duplicatePromptPage(row, token, sameValueMatches));
+            }
+          }
+
           const payload = buildMomencePayload(row);
           const result = await callMomence(payload);
 

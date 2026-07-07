@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as RequestsRouteImport } from './routes/requests'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as RequestsRequestIdEditRouteImport } from './routes/requests.$requestId.edit'
 import { Route as ApiPublicDiscountDecisionRouteImport } from './routes/api/public/discount.decision'
 
 const RequestsRoute = RequestsRouteImport.update({
@@ -23,6 +24,11 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const RequestsRequestIdEditRoute = RequestsRequestIdEditRouteImport.update({
+  id: '/$requestId/edit',
+  path: '/$requestId/edit',
+  getParentRoute: () => RequestsRoute,
+} as any)
 const ApiPublicDiscountDecisionRoute =
   ApiPublicDiscountDecisionRouteImport.update({
     id: '/api/public/discount/decision',
@@ -32,31 +38,47 @@ const ApiPublicDiscountDecisionRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/requests': typeof RequestsRoute
+  '/requests': typeof RequestsRouteWithChildren
+  '/requests/$requestId/edit': typeof RequestsRequestIdEditRoute
   '/api/public/discount/decision': typeof ApiPublicDiscountDecisionRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/requests': typeof RequestsRoute
+  '/requests': typeof RequestsRouteWithChildren
+  '/requests/$requestId/edit': typeof RequestsRequestIdEditRoute
   '/api/public/discount/decision': typeof ApiPublicDiscountDecisionRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/requests': typeof RequestsRoute
+  '/requests': typeof RequestsRouteWithChildren
+  '/requests/$requestId/edit': typeof RequestsRequestIdEditRoute
   '/api/public/discount/decision': typeof ApiPublicDiscountDecisionRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/requests' | '/api/public/discount/decision'
+  fullPaths:
+    | '/'
+    | '/requests'
+    | '/requests/$requestId/edit'
+    | '/api/public/discount/decision'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/requests' | '/api/public/discount/decision'
-  id: '__root__' | '/' | '/requests' | '/api/public/discount/decision'
+  to:
+    | '/'
+    | '/requests'
+    | '/requests/$requestId/edit'
+    | '/api/public/discount/decision'
+  id:
+    | '__root__'
+    | '/'
+    | '/requests'
+    | '/requests/$requestId/edit'
+    | '/api/public/discount/decision'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  RequestsRoute: typeof RequestsRoute
+  RequestsRoute: typeof RequestsRouteWithChildren
   ApiPublicDiscountDecisionRoute: typeof ApiPublicDiscountDecisionRoute
 }
 
@@ -76,6 +98,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/requests/$requestId/edit': {
+      id: '/requests/$requestId/edit'
+      path: '/$requestId/edit'
+      fullPath: '/requests/$requestId/edit'
+      preLoaderRoute: typeof RequestsRequestIdEditRouteImport
+      parentRoute: typeof RequestsRoute
+    }
     '/api/public/discount/decision': {
       id: '/api/public/discount/decision'
       path: '/api/public/discount/decision'
@@ -86,9 +115,21 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface RequestsRouteChildren {
+  RequestsRequestIdEditRoute: typeof RequestsRequestIdEditRoute
+}
+
+const RequestsRouteChildren: RequestsRouteChildren = {
+  RequestsRequestIdEditRoute: RequestsRequestIdEditRoute,
+}
+
+const RequestsRouteWithChildren = RequestsRoute._addFileChildren(
+  RequestsRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  RequestsRoute: RequestsRoute,
+  RequestsRoute: RequestsRouteWithChildren,
   ApiPublicDiscountDecisionRoute: ApiPublicDiscountDecisionRoute,
 }
 export const routeTree = rootRouteImport

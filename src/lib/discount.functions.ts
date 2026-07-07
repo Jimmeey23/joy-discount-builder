@@ -13,48 +13,66 @@ const hasMaxTwoDecimals = (value: number) => {
 };
 type DiscountRequestRow = Tables<"discount_requests">;
 
-const SubmitSchema = z
-  .object({
-    code: z
-      .string()
-      .trim()
-      .min(1)
-      .max(64)
-      .regex(/^[A-Za-z0-9_$@!-]+$/),
-    discountType: z.enum(["percentage", "fixed"]),
-    discountValue: z.number().min(0.01).max(1000000),
-    usageLimitType: z.enum(["unlimited", "limited"]),
-    usageAmount: z.number().int().min(1).max(1000000).nullable().optional(),
-    renewalLimitType: z.enum(["unlimited", "limited"]),
-    renewalsCount: z.number().int().min(1).max(1000).nullable().optional(),
-    expiresAt: z.string().trim().min(1),
-    appliesTo: z.enum(["everything", "specific"]),
-    membershipIds: z.array(z.number().int()).max(500),
-    membershipNames: z.array(z.string()).max(500),
-    associateName: z.string().trim().min(1).max(100),
-    location: z.string().min(1).max(200),
-    reason: z.string().trim().min(1).max(200),
-    notes: z.string().max(2000).optional().nullable(),
-    description: z.string().max(500).optional().nullable(),
-    requestedBy: z.string().max(100).optional().nullable(),
-  })
-  .superRefine((data, ctx) => {
-    if (!hasMaxTwoDecimals(data.discountValue)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Discount value can have up to 2 decimal places",
-        path: ["discountValue"],
-      });
-    }
+const SubmitSchemaBase = z.object({
+  code: z
+    .string()
+    .trim()
+    .min(1)
+    .max(64)
+    .regex(/^[A-Za-z0-9_$@!-]+$/),
+  discountType: z.enum(["percentage", "fixed"]),
+  discountValue: z.number().min(0.01).max(1000000),
+  usageLimitType: z.enum(["unlimited", "limited"]),
+  usageAmount: z.number().int().min(1).max(1000000).nullable().optional(),
+  renewalLimitType: z.enum(["unlimited", "limited"]),
+  renewalsCount: z.number().int().min(1).max(1000).nullable().optional(),
+  expiresAt: z.string().trim().min(1),
+  appliesTo: z.enum(["everything", "specific"]),
+  membershipIds: z.array(z.number().int()).max(500),
+  membershipNames: z.array(z.string()).max(500),
+  associateName: z.string().trim().min(1).max(100),
+  location: z.string().min(1).max(200),
+  reason: z.string().trim().min(1).max(200),
+  notes: z.string().max(2000).optional().nullable(),
+  description: z.string().max(500).optional().nullable(),
+  requestedBy: z.string().max(100).optional().nullable(),
+});
+const SubmitSchema = SubmitSchemaBase.superRefine((data, ctx) => {
+  if (!hasMaxTwoDecimals(data.discountValue)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Discount value can have up to 2 decimal places",
+      path: ["discountValue"],
+    });
+  }
 
-    if (data.reason === OTHER_REASON && !data.notes?.trim()) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Notes are required when reason is Other",
-        path: ["notes"],
-      });
-    }
-  });
+  if (data.reason === OTHER_REASON && !data.notes?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Notes are required when reason is Other",
+      path: ["notes"],
+    });
+  }
+});
+const UpdateSchema = SubmitSchemaBase.extend({
+  id: z.string().uuid(),
+}).superRefine((data, ctx) => {
+  if (!hasMaxTwoDecimals(data.discountValue)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Discount value can have up to 2 decimal places",
+      path: ["discountValue"],
+    });
+  }
+
+  if (data.reason === OTHER_REASON && !data.notes?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Notes are required when reason is Other",
+      path: ["notes"],
+    });
+  }
+});
 
 const STABLE_PUBLIC_URL = "https://project--5d498845-315c-4003-af46-2a005cd23f71.lovable.app";
 
@@ -209,25 +227,7 @@ export const submitDiscountRequest = createServerFn({ method: "POST" })
 
     const { data: row, error } = await supabaseAdmin
       .from("discount_requests")
-      .insert({
-        code: data.code,
-        discount_type: data.discountType,
-        discount_value: data.discountValue,
-        usage_limit_type: data.usageLimitType,
-        usage_amount: data.usageLimitType === "limited" ? (data.usageAmount ?? null) : null,
-        renewal_limit_type: data.renewalLimitType,
-        renewals_count: data.renewalLimitType === "limited" ? (data.renewalsCount ?? null) : null,
-        expires_at: data.expiresAt || null,
-        applies_to: data.appliesTo,
-        membership_ids: data.appliesTo === "specific" ? data.membershipIds : [],
-        membership_names: data.appliesTo === "specific" ? data.membershipNames : [],
-        associate_name: data.associateName,
-        location: data.location,
-        reason: data.reason,
-        notes: data.notes || null,
-        description: data.description || null,
-        requested_by: data.requestedBy || null,
-      })
+      .insert(discountRequestPayload(data))
       .select()
       .single();
 
@@ -268,6 +268,77 @@ export const submitDiscountRequest = createServerFn({ method: "POST" })
     }
 
     return { id: row.id, code: row.code, emailSent: true };
+  });
+
+function discountRequestPayload(data: z.infer<typeof SubmitSchema>) {
+  return {
+    code: data.code,
+    discount_type: data.discountType,
+    discount_value: data.discountValue,
+    usage_limit_type: data.usageLimitType,
+    usage_amount: data.usageLimitType === "limited" ? (data.usageAmount ?? null) : null,
+    renewal_limit_type: data.renewalLimitType,
+    renewals_count: data.renewalLimitType === "limited" ? (data.renewalsCount ?? null) : null,
+    expires_at: data.expiresAt || null,
+    applies_to: data.appliesTo,
+    membership_ids: data.appliesTo === "specific" ? data.membershipIds : [],
+    membership_names: data.appliesTo === "specific" ? data.membershipNames : [],
+    associate_name: data.associateName,
+    location: data.location,
+    reason: data.reason,
+    notes: data.notes || null,
+    description: data.description || null,
+    requested_by: data.requestedBy || null,
+  };
+}
+
+export const getDiscountRequest = createServerFn({ method: "GET" })
+  .inputValidator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
+  .handler(async ({ data }) => {
+    const { data: row, error } = await supabaseAdmin
+      .from("discount_requests")
+      .select("*")
+      .eq("id", data.id)
+      .maybeSingle();
+
+    if (error) throw new Error(error.message);
+    if (!row) throw new Error("Discount request not found");
+    return { request: row };
+  });
+
+export const updateDiscountRequest = createServerFn({ method: "POST" })
+  .inputValidator((input: unknown) => UpdateSchema.parse(input))
+  .handler(async ({ data }) => {
+    const { data: existing, error: fetchError } = await supabaseAdmin
+      .from("discount_requests")
+      .select("id,status")
+      .eq("id", data.id)
+      .maybeSingle();
+
+    if (fetchError) throw new Error(fetchError.message);
+    if (!existing) throw new Error("Discount request not found");
+    if (existing.status === "approved") {
+      throw new Error("Approved discount requests cannot be edited");
+    }
+
+    const { data: row, error } = await supabaseAdmin
+      .from("discount_requests")
+      .update({
+        ...discountRequestPayload(data),
+        status: existing.status === "failed" ? "pending" : existing.status,
+        error_message: null,
+        momence_response: null,
+      })
+      .eq("id", data.id)
+      .neq("status", "approved")
+      .select()
+      .single();
+
+    if (error || !row) {
+      throw new Error(`Failed to update request: ${error?.message ?? "unknown error"}`);
+    }
+
+    return { id: row.id, code: row.code };
   });
 
 export const listDiscountRequests = createServerFn({ method: "GET" }).handler(async () => {
