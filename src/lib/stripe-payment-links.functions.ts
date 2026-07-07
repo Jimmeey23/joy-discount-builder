@@ -292,21 +292,24 @@ export const listStripeCatalog = createServerFn({ method: "GET" }).handler(async
           ? `${price.recurring.interval_count} ${price.recurring.interval}`
           : null,
       })),
-    promotionCodes: promotionCodes.flatMap((code) => {
+    promotionCodes: promotionCodes.map((code) => {
       const coupon = code.coupon;
       if (!coupon || typeof coupon !== "object" || "deleted" in coupon) {
-        return [];
-      }
-      return [
-        {
+        return {
           id: code.id,
           code: code.code,
-          couponId: coupon.id,
-          label: coupon.percent_off
-            ? `${code.code} · ${coupon.percent_off}% off`
-            : `${code.code} · ${money(coupon.amount_off ?? 0, coupon.currency ?? "inr")} off`,
-        },
-      ];
+          couponId: typeof coupon === "string" ? coupon : "",
+          label: code.code,
+        };
+      }
+      return {
+        id: code.id,
+        code: code.code,
+        couponId: coupon.id,
+        label: coupon.percent_off
+          ? `${code.code} · ${coupon.percent_off}% off`
+          : `${code.code} · ${money(coupon.amount_off ?? 0, coupon.currency ?? "inr")} off`,
+      };
     }),
     promoLoadError:
       promotionCodesResult.status === "rejected" ? errorMessage(promotionCodesResult.reason) : null,

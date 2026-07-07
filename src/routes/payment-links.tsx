@@ -435,36 +435,50 @@ function PaymentLinksPage() {
             </label>
 
             {allowPromoCodes && (
-              <div className="grid gap-6 md:grid-cols-2">
-                <Field label="Promo code">
-                  <Select
-                    value={promoMode === "none" ? "existing" : promoMode}
-                    onValueChange={(value) => setPromoMode(value as PromoMode)}
+              <div className="space-y-4">
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant={promoMode === "existing" ? "default" : "outline"}
+                    onClick={() => setPromoMode("existing")}
                   >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="existing">Use existing Stripe promo code</SelectItem>
-                      <SelectItem value="custom">Create custom promo code</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </Field>
+                    Use existing promo code
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={promoMode === "custom" ? "default" : "outline"}
+                    onClick={() => {
+                      setPromoMode("custom");
+                      setPromotionCodeId("");
+                    }}
+                  >
+                    Create new promo code
+                  </Button>
+                </div>
+
                 {promoMode === "existing" && (
-                  <Field label="Existing Stripe promo code">
-                    <Select value={promotionCodeId} onValueChange={setPromotionCodeId}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select promo code" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {catalog.data?.promotionCodes.map((code) => (
-                          <SelectItem key={code.id} value={code.id}>
-                            {code.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </Field>
+                  <div className="grid gap-6 md:grid-cols-2">
+                    <Field label="Existing Stripe promo code">
+                      <Select value={promotionCodeId} onValueChange={setPromotionCodeId}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select promo code" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {catalog.data?.promotionCodes.length ? (
+                            catalog.data.promotionCodes.map((code) => (
+                              <SelectItem key={code.id} value={code.id}>
+                                {code.label}
+                              </SelectItem>
+                            ))
+                          ) : (
+                            <SelectItem value="__none" disabled>
+                              No active promo codes found
+                            </SelectItem>
+                          )}
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                  </div>
                 )}
               </div>
             )}
