@@ -36,5 +36,17 @@ export const DISCOUNT_REASONS = [
   "Other (see notes)",
 ] as const;
 
+export const PAYMENT_LINK_PURPOSES = [
+  "Membership purchase",
+  "Private session payment",
+  "Workshop / event payment",
+  "Retail / merchandise payment",
+  "Outstanding balance collection",
+  "Service recovery payment",
+  "Corporate / partnership payment",
+  "Custom package payment",
+  "Other",
+] as const;
+
 export const APPROVAL_EMAIL = "jimmeey@physique57india.com";
 export const MOMENCE_HOST_ID = 13752;

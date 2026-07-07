@@ -107,12 +107,17 @@ export type Database = {
           custom_promo_type: string | null;
           custom_promo_value: number | null;
           custom_promotion_code_id: string | null;
+          custom_fields: Json;
           customer_email: string | null;
           customer_name: string | null;
+          description: string | null;
           error_message: string | null;
           id: string;
           last_event: Json | null;
           last_payment_at: string | null;
+          line_items: Json;
+          momence_member_details: Json | null;
+          momence_member_id: string | null;
           payment_count: number;
           product_name: string;
           promotion_code: string | null;
@@ -129,6 +134,7 @@ export type Database = {
           total_paid_amount: number;
           unit_amount: number;
           updated_at: string;
+          utm_parameters: Json;
         };
         Insert: {
           approve_token?: string;
@@ -141,12 +147,17 @@ export type Database = {
           custom_promo_type?: string | null;
           custom_promo_value?: number | null;
           custom_promotion_code_id?: string | null;
+          custom_fields?: Json;
           customer_email?: string | null;
           customer_name?: string | null;
+          description?: string | null;
           error_message?: string | null;
           id?: string;
           last_event?: Json | null;
           last_payment_at?: string | null;
+          line_items?: Json;
+          momence_member_details?: Json | null;
+          momence_member_id?: string | null;
           payment_count?: number;
           product_name: string;
           promotion_code?: string | null;
@@ -163,6 +174,7 @@ export type Database = {
           total_paid_amount?: number;
           unit_amount: number;
           updated_at?: string;
+          utm_parameters?: Json;
         };
         Update: {
           approve_token?: string;
@@ -175,12 +187,17 @@ export type Database = {
           custom_promo_type?: string | null;
           custom_promo_value?: number | null;
           custom_promotion_code_id?: string | null;
+          custom_fields?: Json;
           customer_email?: string | null;
           customer_name?: string | null;
+          description?: string | null;
           error_message?: string | null;
           id?: string;
           last_event?: Json | null;
           last_payment_at?: string | null;
+          line_items?: Json;
+          momence_member_details?: Json | null;
+          momence_member_id?: string | null;
           payment_count?: number;
           product_name?: string;
           promotion_code?: string | null;
@@ -197,6 +214,7 @@ export type Database = {
           total_paid_amount?: number;
           unit_amount?: number;
           updated_at?: string;
+          utm_parameters?: Json;
         };
         Relationships: [];
       };

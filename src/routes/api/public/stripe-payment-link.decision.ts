@@ -59,19 +59,32 @@ function samePromo(a: PaymentLinkRow, b: PaymentLinkRow) {
   );
 }
 
+function normalizedItems(row: PaymentLinkRow) {
+  const items = Array.isArray(row.line_items)
+    ? (row.line_items as Array<{ priceId?: string; quantity?: number }>)
+    : [{ priceId: row.stripe_price_id, quantity: row.quantity }];
+  return items
+    .map((item) => `${item.priceId ?? ""}:${item.quantity ?? 1}`)
+    .sort()
+    .join("|");
+}
+
 async function findDuplicate(row: PaymentLinkRow) {
   const { data, error } = await supabaseAdmin
     .from("stripe_payment_links")
     .select("*")
     .neq("id", row.id)
-    .eq("stripe_price_id", row.stripe_price_id)
-    .eq("quantity", row.quantity)
     .eq("requested_amount", row.requested_amount)
     .not("stripe_payment_link_url", "is", null)
     .in("status", ["created", "paid", "inactive"]);
 
   if (error) throw new Error(error.message);
-  return ((data ?? []) as PaymentLinkRow[]).find((candidate) => samePromo(row, candidate)) ?? null;
+  const rowItems = normalizedItems(row);
+  return (
+    ((data ?? []) as PaymentLinkRow[]).find(
+      (candidate) => samePromo(row, candidate) && normalizedItems(candidate) === rowItems,
+    ) ?? null
+  );
 }
 
 function duplicatePrompt(row: PaymentLinkRow, token: string, duplicate: PaymentLinkRow) {

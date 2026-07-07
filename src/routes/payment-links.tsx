@@ -8,9 +8,11 @@ import {
   createStripePaymentLink,
   listStripeCatalog,
   listStripePaymentLinks,
+  searchMomenceMembers,
   setStripePaymentLinkActive,
   updateStripePaymentLinkRequest,
 } from "@/lib/stripe-payment-links.functions";
+import { ASSOCIATES, PAYMENT_LINK_PURPOSES } from "@/data/constants";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -30,6 +32,9 @@ import type { Tables } from "@/integrations/supabase/types";
 type PromoMode = "none" | "existing" | "custom";
 type CustomPromoType = "percentage" | "fixed";
 type PaymentLinkRow = Tables<"stripe_payment_links">;
+type LineItem = { priceId: string; quantity: string };
+type CustomField = { key: string; label: string; type: "text" | "numeric"; optional: boolean };
+type MomenceMember = { id: string; name: string; email: string; phone: string; raw: unknown };
 
 export const Route = createFileRoute("/payment-links")({
   component: PaymentLinksPage,
@@ -103,6 +108,7 @@ function PaymentLinksPage() {
   const createFn = useServerFn(createStripePaymentLink);
   const updateFn = useServerFn(updateStripePaymentLinkRequest);
   const setActiveFn = useServerFn(setStripePaymentLinkActive);
+  const memberSearchFn = useServerFn(searchMomenceMembers);
 
   const catalog = useQuery({
     queryKey: ["stripe-catalog"],
@@ -114,8 +120,7 @@ function PaymentLinksPage() {
     refetchInterval: 8000,
   });
 
-  const [priceId, setPriceId] = useState("");
-  const [quantity, setQuantity] = useState("1");
+  const [lineItems, setLineItems] = useState<LineItem[]>([{ priceId: "", quantity: "1" }]);
   const [promoMode, setPromoMode] = useState<PromoMode>("none");
   const [promotionCodeId, setPromotionCodeId] = useState("");
   const [customPromoCode, setCustomPromoCode] = useState("");
@@ -123,13 +128,37 @@ function PaymentLinksPage() {
   const [customPromoValue, setCustomPromoValue] = useState("");
   const [customerEmail, setCustomerEmail] = useState("");
   const [customerName, setCustomerName] = useState("");
+  const [memberQuery, setMemberQuery] = useState("");
+  const [selectedMember, setSelectedMember] = useState<MomenceMember | null>(null);
+  const [description, setDescription] = useState("");
+  const [customFields, setCustomFields] = useState<CustomField[]>([]);
+  const [utm, setUtm] = useState({
+    source: "",
+    medium: "",
+    campaign: "",
+    term: "",
+    content: "",
+  });
   const [purpose, setPurpose] = useState("");
   const [createdBy, setCreatedBy] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  const selectedProduct = useMemo(
-    () => catalog.data?.products.find((product) => product.priceId === priceId),
-    [catalog.data?.products, priceId],
+  const memberSearch = useQuery({
+    queryKey: ["momence-members", memberQuery],
+    queryFn: () => memberSearchFn({ data: { query: memberQuery } }),
+    enabled: memberQuery.trim().length >= 2,
+  });
+
+  const selectedProducts = useMemo(
+    () =>
+      lineItems
+        .map((item) => {
+          const product = catalog.data?.products.find((p) => p.priceId === item.priceId);
+          if (!product) return null;
+          return { ...product, quantity: Number(item.quantity || 1) };
+        })
+        .filter(Boolean),
+    [catalog.data?.products, lineItems],
   );
 
   const createMutation = useMutation({
@@ -137,8 +166,10 @@ function PaymentLinksPage() {
       (editingId ? updateFn : createFn)({
         data: {
           ...(editingId ? { id: editingId } : {}),
-          priceId,
-          quantity: Number(quantity),
+          lineItems: lineItems.map((item) => ({
+            priceId: item.priceId,
+            quantity: Number(item.quantity),
+          })),
           promoMode,
           promotionCodeId: promoMode === "existing" ? promotionCodeId : null,
           customPromoCode: promoMode === "custom" ? customPromoCode : null,
@@ -146,6 +177,11 @@ function PaymentLinksPage() {
           customPromoValue: promoMode === "custom" ? Number(customPromoValue) : null,
           customerEmail: customerEmail || null,
           customerName: customerName || null,
+          momenceMemberId: selectedMember?.id ?? null,
+          momenceMemberDetails: selectedMember?.raw ?? null,
+          description: description || null,
+          customFields,
+          utm,
           purpose: purpose || null,
           createdBy: createdBy || null,
         },
@@ -182,8 +218,10 @@ function PaymentLinksPage() {
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!priceId) return toast.error("Select a Stripe product");
-    if (!quantity || Number(quantity) < 1) return toast.error("Enter a valid quantity");
+    if (lineItems.some((item) => !item.priceId)) return toast.error("Select every Stripe product");
+    if (lineItems.some((item) => !item.quantity || Number(item.quantity) < 1)) {
+      return toast.error("Enter valid quantities");
+    }
     if (promoMode === "existing" && !promotionCodeId) return toast.error("Select a promo code");
     if (promoMode === "custom" && !customPromoCode.trim()) {
       return toast.error("Enter a custom promo code");
@@ -196,8 +234,17 @@ function PaymentLinksPage() {
 
   function editLink(link: PaymentLinkRow) {
     setEditingId(link.id);
-    setPriceId(link.stripe_price_id);
-    setQuantity(String(link.quantity));
+    const existingItems = Array.isArray(link.line_items)
+      ? (link.line_items as Array<{ priceId?: string; quantity?: number }>)
+      : [];
+    setLineItems(
+      existingItems.length
+        ? existingItems.map((item) => ({
+            priceId: item.priceId ?? "",
+            quantity: String(item.quantity ?? 1),
+          }))
+        : [{ priceId: link.stripe_price_id, quantity: String(link.quantity) }],
+    );
     if (link.promotion_code_id) {
       setPromoMode("existing");
       setPromotionCodeId(link.promotion_code_id);
@@ -215,6 +262,30 @@ function PaymentLinksPage() {
     }
     setCustomerEmail(link.customer_email ?? "");
     setCustomerName(link.customer_name ?? "");
+    setSelectedMember(
+      link.momence_member_id
+        ? {
+            id: link.momence_member_id,
+            name: link.customer_name ?? "Momence member",
+            email: link.customer_email ?? "",
+            phone: "",
+            raw: link.momence_member_details,
+          }
+        : null,
+    );
+    setDescription(link.description ?? "");
+    setCustomFields(Array.isArray(link.custom_fields) ? (link.custom_fields as CustomField[]) : []);
+    const savedUtm =
+      link.utm_parameters && typeof link.utm_parameters === "object"
+        ? (link.utm_parameters as Partial<typeof utm>)
+        : {};
+    setUtm({
+      source: savedUtm.source ?? "",
+      medium: savedUtm.medium ?? "",
+      campaign: savedUtm.campaign ?? "",
+      term: savedUtm.term ?? "",
+      content: savedUtm.content ?? "",
+    });
     setPurpose(link.purpose ?? "");
     setCreatedBy(link.created_by ?? "");
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -249,41 +320,80 @@ function PaymentLinksPage() {
             </h3>
           </div>
 
-          <div className="grid gap-6 md:grid-cols-2">
-            <Field label="Stripe product">
-              <Select value={priceId} onValueChange={setPriceId}>
-                <SelectTrigger>
-                  <SelectValue
-                    placeholder={catalog.isLoading ? "Loading products..." : "Select product"}
-                  />
-                </SelectTrigger>
-                <SelectContent>
-                  {catalog.data?.products.map((product) => (
-                    <SelectItem key={product.priceId} value={product.priceId}>
-                      {product.name} · {product.displayAmount}
-                      {product.recurring ? ` · ${product.recurring}` : ""}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field label="Quantity">
-              <Input
-                type="number"
-                min="1"
-                value={quantity}
-                onChange={(e) => setQuantity(e.target.value)}
-              />
-            </Field>
+          <div className="space-y-3">
+            <Label className="block text-sm font-medium">Stripe products</Label>
+            {catalog.error && (
+              <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                {catalog.error instanceof Error
+                  ? catalog.error.message
+                  : "Could not load Stripe products"}
+              </div>
+            )}
+            {lineItems.map((item, index) => (
+              <div key={index} className="grid gap-3 md:grid-cols-[1fr_120px_80px]">
+                <Select
+                  value={item.priceId}
+                  onValueChange={(value) =>
+                    setLineItems((items) =>
+                      items.map((next, i) => (i === index ? { ...next, priceId: value } : next)),
+                    )
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue
+                      placeholder={catalog.isLoading ? "Loading products..." : "Select product"}
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {catalog.data?.products.map((product) => (
+                      <SelectItem key={product.priceId} value={product.priceId}>
+                        {product.name} · {product.displayAmount}
+                        {product.recurring ? ` · ${product.recurring}` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Input
+                  type="number"
+                  min="1"
+                  value={item.quantity}
+                  onChange={(e) =>
+                    setLineItems((items) =>
+                      items.map((next, i) =>
+                        i === index ? { ...next, quantity: e.target.value } : next,
+                      ),
+                    )
+                  }
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={lineItems.length === 1}
+                  onClick={() => setLineItems((items) => items.filter((_, i) => i !== index))}
+                >
+                  Remove
+                </Button>
+              </div>
+            ))}
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setLineItems((items) => [...items, { priceId: "", quantity: "1" }])}
+            >
+              Add product
+            </Button>
           </div>
 
-          {selectedProduct && (
+          {selectedProducts.length > 0 && (
             <div className="rounded-lg border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
               Link amount before discount:{" "}
               <span className="font-medium text-foreground">
                 {formatMoney(
-                  selectedProduct.unitAmount * Number(quantity || 1),
-                  selectedProduct.currency,
+                  selectedProducts.reduce(
+                    (sum, product) => sum + (product?.unitAmount ?? 0) * (product?.quantity ?? 1),
+                    0,
+                  ),
+                  selectedProducts[0]?.currency ?? "inr",
                 )}
               </span>
             </div>
@@ -357,6 +467,51 @@ function PaymentLinksPage() {
             </div>
           )}
 
+          <div className="space-y-3">
+            <Field label="Momence member">
+              <Input
+                value={memberQuery}
+                onChange={(e) => setMemberQuery(e.target.value)}
+                placeholder="Search Momence members by name, email, or phone"
+              />
+            </Field>
+            {memberSearch.error && (
+              <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                {memberSearch.error instanceof Error
+                  ? memberSearch.error.message
+                  : "Could not load Momence members"}
+              </div>
+            )}
+            {memberSearch.data?.members.length ? (
+              <div className="rounded-lg border overflow-hidden">
+                {(memberSearch.data.members as MomenceMember[]).map((member) => (
+                  <button
+                    key={member.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedMember(member);
+                      setCustomerName(member.name);
+                      setCustomerEmail(member.email);
+                      setMemberQuery(member.name);
+                    }}
+                    className="block w-full px-3 py-2 text-left text-sm hover:bg-muted"
+                  >
+                    <span className="font-medium">{member.name}</span>
+                    <span className="ml-2 text-muted-foreground">
+                      {[member.email, member.phone].filter(Boolean).join(" · ")}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {selectedMember && (
+              <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                Selected: {selectedMember.name}
+                {selectedMember.email ? ` · ${selectedMember.email}` : ""}
+              </div>
+            )}
+          </div>
+
           <div className="grid gap-6 md:grid-cols-2">
             <Field label="Customer email">
               <Input
@@ -375,23 +530,124 @@ function PaymentLinksPage() {
             </Field>
           </div>
 
-          <Field label="Purpose / internal note">
+          <div className="grid gap-6 md:grid-cols-2">
+            <Field label="Purpose">
+              <Select value={purpose} onValueChange={setPurpose}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select purpose" />
+                </SelectTrigger>
+                <SelectContent>
+                  {PAYMENT_LINK_PURPOSES.map((item) => (
+                    <SelectItem key={item} value={item}>
+                      {item}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field label="Created by">
+              <Select value={createdBy} onValueChange={setCreatedBy}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select team member" />
+                </SelectTrigger>
+                <SelectContent>
+                  {ASSOCIATES.map((associate) => (
+                    <SelectItem key={associate} value={associate}>
+                      {associate}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          </div>
+
+          <Field label="Description / payment details">
             <Textarea
-              value={purpose}
-              onChange={(e) => setPurpose(e.target.value)}
-              placeholder="What this link is for, campaign context, or member details..."
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Details shown internally for approval, handoff, or reconciliation..."
               rows={3}
             />
           </Field>
 
-          <div className="grid gap-6 md:grid-cols-2">
-            <Field label="Created by">
-              <Input
-                value={createdBy}
-                onChange={(e) => setCreatedBy(e.target.value)}
-                placeholder="Team member name"
-              />
-            </Field>
+          <div className="space-y-3">
+            <Label className="block text-sm font-medium">Stripe custom fields</Label>
+            {customFields.map((field, index) => (
+              <div key={index} className="grid gap-3 md:grid-cols-[1fr_1fr_130px_90px]">
+                <Input
+                  value={field.key}
+                  onChange={(e) =>
+                    setCustomFields((fields) =>
+                      fields.map((next, i) =>
+                        i === index ? { ...next, key: e.target.value } : next,
+                      ),
+                    )
+                  }
+                  placeholder="field_key"
+                />
+                <Input
+                  value={field.label}
+                  onChange={(e) =>
+                    setCustomFields((fields) =>
+                      fields.map((next, i) =>
+                        i === index ? { ...next, label: e.target.value } : next,
+                      ),
+                    )
+                  }
+                  placeholder="Field label"
+                />
+                <Select
+                  value={field.type}
+                  onValueChange={(value) =>
+                    setCustomFields((fields) =>
+                      fields.map((next, i) =>
+                        i === index ? { ...next, type: value as "text" | "numeric" } : next,
+                      ),
+                    )
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="text">Text</SelectItem>
+                    <SelectItem value="numeric">Number</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setCustomFields((fields) => fields.filter((_, i) => i !== index))}
+                >
+                  Remove
+                </Button>
+              </div>
+            ))}
+            <Button
+              type="button"
+              variant="outline"
+              disabled={customFields.length >= 3}
+              onClick={() =>
+                setCustomFields((fields) => [
+                  ...fields,
+                  { key: "", label: "", type: "text", optional: true },
+                ])
+              }
+            >
+              Add custom field
+            </Button>
+          </div>
+
+          <div className="grid gap-6 md:grid-cols-5">
+            {(["source", "medium", "campaign", "term", "content"] as const).map((key) => (
+              <Field key={key} label={`UTM ${key}`}>
+                <Input
+                  value={utm[key]}
+                  onChange={(e) => setUtm((next) => ({ ...next, [key]: e.target.value }))}
+                  placeholder={key}
+                />
+              </Field>
+            ))}
           </div>
 
           <div className="flex justify-end">

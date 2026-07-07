@@ -85,8 +85,15 @@ function productId(product: string | Stripe.Product | Stripe.DeletedProduct | nu
 
 const CreatePaymentLinkSchema = z
   .object({
-    priceId: z.string().min(1),
-    quantity: z.number().int().min(1).max(999),
+    lineItems: z
+      .array(
+        z.object({
+          priceId: z.string().min(1),
+          quantity: z.number().int().min(1).max(999),
+        }),
+      )
+      .min(1)
+      .max(20),
     promoMode: z.enum(["none", "existing", "custom"]),
     promotionCodeId: z.string().optional().nullable(),
     customPromoCode: z.string().trim().max(64).optional().nullable(),
@@ -94,6 +101,29 @@ const CreatePaymentLinkSchema = z
     customPromoValue: z.number().min(0.01).max(1000000).optional().nullable(),
     customerEmail: z.string().email().optional().nullable(),
     customerName: z.string().max(120).optional().nullable(),
+    momenceMemberId: z.string().max(80).optional().nullable(),
+    momenceMemberDetails: z.unknown().optional().nullable(),
+    description: z.string().max(1000).optional().nullable(),
+    customFields: z
+      .array(
+        z.object({
+          key: z.string().trim().min(1).max(40),
+          label: z.string().trim().min(1).max(50),
+          type: z.enum(["text", "numeric"]),
+          optional: z.boolean(),
+        }),
+      )
+      .max(3)
+      .optional(),
+    utm: z
+      .object({
+        source: z.string().max(100).optional().nullable(),
+        medium: z.string().max(100).optional().nullable(),
+        campaign: z.string().max(100).optional().nullable(),
+        term: z.string().max(100).optional().nullable(),
+        content: z.string().max(100).optional().nullable(),
+      })
+      .optional(),
     purpose: z.string().max(500).optional().nullable(),
     createdBy: z.string().max(120).optional().nullable(),
   })
@@ -139,6 +169,55 @@ const CreatePaymentLinkSchema = z
 
 const UpdatePaymentLinkSchema = CreatePaymentLinkSchema.and(z.object({ id: z.string().uuid() }));
 
+type PaymentLinkInput = z.infer<typeof CreatePaymentLinkSchema>;
+
+async function buildPaymentLinkRequestPayload(
+  stripe: Awaited<ReturnType<typeof stripeClient>>,
+  data: PaymentLinkInput,
+) {
+  const prices = await Promise.all(
+    data.lineItems.map((item) => stripe.prices.retrieve(item.priceId, { expand: ["product"] })),
+  );
+  const enrichedItems = prices.map((price, index) => ({
+    priceId: price.id,
+    productId: productId(price.product),
+    productName: productName(price.product),
+    currency: price.currency,
+    unitAmount: price.unit_amount ?? 0,
+    quantity: data.lineItems[index].quantity,
+    amount: (price.unit_amount ?? 0) * data.lineItems[index].quantity,
+  }));
+  const first = enrichedItems[0];
+  const total = enrichedItems.reduce((sum, item) => sum + item.amount, 0);
+
+  return {
+    stripe_price_id: first.priceId,
+    stripe_product_id: first.productId,
+    product_name:
+      enrichedItems.length === 1
+        ? first.productName
+        : `${first.productName} + ${enrichedItems.length - 1} more`,
+    line_items: toJson(enrichedItems),
+    currency: first.currency,
+    unit_amount: first.unitAmount,
+    quantity: first.quantity,
+    requested_amount: total,
+    promotion_code_id: data.promoMode === "existing" ? data.promotionCodeId : null,
+    promotion_code: data.promoMode === "custom" ? data.customPromoCode?.trim().toUpperCase() : null,
+    custom_promo_type: data.promoMode === "custom" ? data.customPromoType : null,
+    custom_promo_value: data.promoMode === "custom" ? data.customPromoValue : null,
+    customer_email: data.customerEmail || null,
+    customer_name: data.customerName || null,
+    momence_member_id: data.momenceMemberId || null,
+    momence_member_details: data.momenceMemberDetails ? toJson(data.momenceMemberDetails) : null,
+    description: data.description || null,
+    custom_fields: toJson(data.customFields ?? []),
+    utm_parameters: toJson(data.utm ?? {}),
+    purpose: data.purpose || null,
+    created_by: data.createdBy || null,
+  };
+}
+
 export const listStripeCatalog = createServerFn({ method: "GET" }).handler(async () => {
   const stripe = await stripeClient();
   const [prices, promotionCodes] = await Promise.all([
@@ -179,35 +258,73 @@ export const listStripeCatalog = createServerFn({ method: "GET" }).handler(async
   };
 });
 
+function momenceToken() {
+  return process.env.MOMENCE_API_ACCESS_TOKEN || process.env.MOMENCE_BEARER_TOKEN || "";
+}
+
+function memberItems(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (!value || typeof value !== "object") return [];
+  const obj = value as Record<string, unknown>;
+  for (const key of ["data", "items", "results", "members"]) {
+    if (Array.isArray(obj[key])) return obj[key];
+  }
+  return [];
+}
+
+export const searchMomenceMembers = createServerFn({ method: "GET" })
+  .inputValidator((input: unknown) =>
+    z.object({ query: z.string().trim().min(1).max(100) }).parse(input),
+  )
+  .handler(async ({ data }) => {
+    const token = momenceToken();
+    if (!token) throw new Error("MOMENCE_API_ACCESS_TOKEN is not configured");
+    const params = new URLSearchParams({
+      page: "0",
+      pageSize: "20",
+      sortOrder: "ASC",
+      sortBy: "firstName",
+      query: data.query,
+    });
+    const res = await fetch(`https://api.momence.com/api/v2/host/members?${params.toString()}`, {
+      headers: {
+        accept: "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    const body = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw new Error(`Momence members API ${res.status}: ${JSON.stringify(body)}`);
+    }
+
+    return {
+      members: memberItems(body).map((item) => {
+        const obj = item as Record<string, unknown>;
+        const firstName = String(obj.firstName ?? obj.first_name ?? "");
+        const lastName = String(obj.lastName ?? obj.last_name ?? "");
+        const email = String(obj.email ?? "");
+        const phone = String(obj.phoneNumber ?? obj.phone_number ?? obj.phone ?? "");
+        return {
+          id: String(obj.id ?? obj.memberId ?? ""),
+          name: [firstName, lastName].filter(Boolean).join(" ") || String(obj.name ?? email),
+          email,
+          phone,
+          raw: obj,
+        };
+      }),
+    };
+  });
+
 export const createStripePaymentLink = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) => CreatePaymentLinkSchema.parse(input))
   .handler(async ({ data }) => {
     const stripe = await stripeClient();
-    const price = await stripe.prices.retrieve(data.priceId, { expand: ["product"] });
-    const unitAmount = price.unit_amount ?? 0;
-    const name = productName(price.product);
     const baseUrl = getBaseUrl();
+    const payload = await buildPaymentLinkRequestPayload(stripe, data);
 
     const { data: row, error } = await supabaseAdmin
       .from("stripe_payment_links")
-      .insert({
-        stripe_price_id: price.id,
-        stripe_product_id: productId(price.product),
-        product_name: name,
-        currency: price.currency,
-        unit_amount: unitAmount,
-        quantity: data.quantity,
-        requested_amount: unitAmount * data.quantity,
-        promotion_code_id: data.promoMode === "existing" ? data.promotionCodeId : null,
-        promotion_code:
-          data.promoMode === "custom" ? data.customPromoCode?.trim().toUpperCase() : null,
-        custom_promo_type: data.promoMode === "custom" ? data.customPromoType : null,
-        custom_promo_value: data.promoMode === "custom" ? data.customPromoValue : null,
-        customer_email: data.customerEmail || null,
-        customer_name: data.customerName || null,
-        purpose: data.purpose || null,
-        created_by: data.createdBy || null,
-      })
+      .insert(payload)
       .select()
       .single();
 
@@ -235,7 +352,6 @@ export const updateStripePaymentLinkRequest = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) => UpdatePaymentLinkSchema.parse(input))
   .handler(async ({ data }) => {
     const stripe = await stripeClient();
-    const price = await stripe.prices.retrieve(data.priceId, { expand: ["product"] });
     const { data: existing, error: fetchError } = await supabaseAdmin
       .from("stripe_payment_links")
       .select("*")
@@ -248,28 +364,13 @@ export const updateStripePaymentLinkRequest = createServerFn({ method: "POST" })
       throw new Error("Payment link requests cannot be edited after approval or payment");
     }
 
-    const unitAmount = price.unit_amount ?? 0;
+    const payload = await buildPaymentLinkRequestPayload(stripe, data);
     const { data: row, error } = await supabaseAdmin
       .from("stripe_payment_links")
       .update({
-        stripe_price_id: price.id,
-        stripe_product_id: productId(price.product),
-        product_name: productName(price.product),
-        currency: price.currency,
-        unit_amount: unitAmount,
-        quantity: data.quantity,
-        requested_amount: unitAmount * data.quantity,
-        promotion_code_id: data.promoMode === "existing" ? data.promotionCodeId : null,
-        promotion_code:
-          data.promoMode === "custom" ? data.customPromoCode?.trim().toUpperCase() : null,
-        custom_promo_type: data.promoMode === "custom" ? data.customPromoType : null,
-        custom_promo_value: data.promoMode === "custom" ? data.customPromoValue : null,
+        ...payload,
         custom_coupon_id: null,
         custom_promotion_code_id: null,
-        customer_email: data.customerEmail || null,
-        customer_name: data.customerName || null,
-        purpose: data.purpose || null,
-        created_by: data.createdBy || null,
         status: "pending",
         error_message: null,
       })
@@ -366,9 +467,32 @@ export async function createApprovedStripePaymentLink(row: PaymentLinkRow) {
     promotionCodeId = promo.id;
   }
 
+  const lineItems = Array.isArray(row.line_items)
+    ? (row.line_items as Array<{ priceId?: string; quantity?: number }>)
+    : [{ priceId: row.stripe_price_id, quantity: row.quantity }];
+  const customFields = Array.isArray(row.custom_fields)
+    ? (row.custom_fields as Array<{
+        key?: string;
+        label?: string;
+        type?: "text" | "numeric";
+        optional?: boolean;
+      }>)
+    : [];
+  const utm =
+    row.utm_parameters && typeof row.utm_parameters === "object" ? row.utm_parameters : {};
+
   const paymentLink = await stripe.paymentLinks.create({
-    line_items: [{ price: row.stripe_price_id, quantity: row.quantity }],
+    line_items: lineItems.map((item) => ({
+      price: item.priceId || row.stripe_price_id,
+      quantity: item.quantity || 1,
+    })),
     discounts: promotionCodeId ? [{ promotion_code: promotionCodeId }] : undefined,
+    custom_fields: customFields.map((field) => ({
+      key: field.key ?? "custom_field",
+      label: { type: "custom", custom: field.label ?? "Custom field" },
+      type: field.type ?? "text",
+      optional: field.optional ?? true,
+    })),
     after_completion: {
       type: "redirect",
       redirect: { url: `${baseUrl}/payment-links?payment=success` },
@@ -377,8 +501,17 @@ export async function createApprovedStripePaymentLink(row: PaymentLinkRow) {
       payment_link_request_id: row.id,
       customer_email: row.customer_email ?? "",
       purpose: row.purpose ?? "",
+      momence_member_id: row.momence_member_id ?? "",
+      description: row.description ?? "",
+      utm_source: String((utm as Record<string, unknown>).source ?? ""),
+      utm_medium: String((utm as Record<string, unknown>).medium ?? ""),
+      utm_campaign: String((utm as Record<string, unknown>).campaign ?? ""),
     },
   });
+  const url = new URL(paymentLink.url);
+  for (const [key, value] of Object.entries(utm as Record<string, unknown>)) {
+    if (value) url.searchParams.set(`utm_${key}`, String(value));
+  }
 
   const { data: updated, error } = await supabaseAdmin
     .from("stripe_payment_links")
@@ -386,7 +519,7 @@ export async function createApprovedStripePaymentLink(row: PaymentLinkRow) {
       status: "created",
       approved_at: new Date().toISOString(),
       stripe_payment_link_id: paymentLink.id,
-      stripe_payment_link_url: paymentLink.url,
+      stripe_payment_link_url: url.toString(),
       promotion_code_id: promotionCodeId,
       custom_coupon_id: couponId,
       custom_promotion_code_id: customPromotionCodeId,
