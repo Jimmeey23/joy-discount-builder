@@ -19,6 +19,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -121,6 +122,7 @@ function PaymentLinksPage() {
   });
 
   const [lineItems, setLineItems] = useState<LineItem[]>([{ priceId: "", quantity: "1" }]);
+  const [allowPromoCodes, setAllowPromoCodes] = useState(false);
   const [promoMode, setPromoMode] = useState<PromoMode>("none");
   const [promotionCodeId, setPromotionCodeId] = useState("");
   const [customPromoCode, setCustomPromoCode] = useState("");
@@ -170,11 +172,12 @@ function PaymentLinksPage() {
             priceId: item.priceId,
             quantity: Number(item.quantity),
           })),
-          promoMode,
-          promotionCodeId: promoMode === "existing" ? promotionCodeId : null,
-          customPromoCode: promoMode === "custom" ? customPromoCode : null,
-          customPromoType: promoMode === "custom" ? customPromoType : null,
-          customPromoValue: promoMode === "custom" ? Number(customPromoValue) : null,
+          promoMode: allowPromoCodes ? promoMode : "none",
+          promotionCodeId: allowPromoCodes && promoMode === "existing" ? promotionCodeId : null,
+          customPromoCode: allowPromoCodes && promoMode === "custom" ? customPromoCode : null,
+          customPromoType: allowPromoCodes && promoMode === "custom" ? customPromoType : null,
+          customPromoValue:
+            allowPromoCodes && promoMode === "custom" ? Number(customPromoValue) : null,
           customerEmail: customerEmail || null,
           customerName: customerName || null,
           momenceMemberId: selectedMember?.id ?? null,
@@ -222,11 +225,17 @@ function PaymentLinksPage() {
     if (lineItems.some((item) => !item.quantity || Number(item.quantity) < 1)) {
       return toast.error("Enter valid quantities");
     }
-    if (promoMode === "existing" && !promotionCodeId) return toast.error("Select a promo code");
-    if (promoMode === "custom" && !customPromoCode.trim()) {
+    if (allowPromoCodes && promoMode === "existing" && !promotionCodeId) {
+      return toast.error("Select a promo code");
+    }
+    if (allowPromoCodes && promoMode === "custom" && !customPromoCode.trim()) {
       return toast.error("Enter a custom promo code");
     }
-    if (promoMode === "custom" && (!customPromoValue || Number(customPromoValue) <= 0)) {
+    if (
+      allowPromoCodes &&
+      promoMode === "custom" &&
+      (!customPromoValue || Number(customPromoValue) <= 0)
+    ) {
       return toast.error("Enter a valid custom promo value");
     }
     createMutation.mutate();
@@ -246,16 +255,19 @@ function PaymentLinksPage() {
         : [{ priceId: link.stripe_price_id, quantity: String(link.quantity) }],
     );
     if (link.promotion_code_id) {
+      setAllowPromoCodes(true);
       setPromoMode("existing");
       setPromotionCodeId(link.promotion_code_id);
       setCustomPromoCode("");
     } else if (link.promotion_code) {
+      setAllowPromoCodes(true);
       setPromoMode("custom");
       setPromotionCodeId("");
       setCustomPromoCode(link.promotion_code);
       setCustomPromoType(link.custom_promo_type === "fixed" ? "fixed" : "percentage");
       setCustomPromoValue(link.custom_promo_value ? String(link.custom_promo_value) : "");
     } else {
+      setAllowPromoCodes(false);
       setPromoMode("none");
       setPromotionCodeId("");
       setCustomPromoCode("");
@@ -404,73 +416,95 @@ function PaymentLinksPage() {
             </div>
           )}
 
-          <div className="grid gap-6 md:grid-cols-2">
-            <Field label="Promo code">
-              <Select value={promoMode} onValueChange={(value) => setPromoMode(value as PromoMode)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">No promo code</SelectItem>
-                  <SelectItem value="existing">Use existing Stripe promo code</SelectItem>
-                  <SelectItem value="custom">Create custom promo code</SelectItem>
-                </SelectContent>
-              </Select>
-            </Field>
-            {promoMode === "existing" && (
-              <Field label="Existing Stripe promo code">
-                <Select value={promotionCodeId} onValueChange={setPromotionCodeId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select promo code" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {catalog.data?.promotionCodes.map((code) => (
-                      <SelectItem key={code.id} value={code.id}>
-                        {code.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
+          <div className="space-y-4">
+            <label className="flex items-center gap-3 text-sm font-medium">
+              <Checkbox
+                checked={allowPromoCodes}
+                onCheckedChange={(checked) => {
+                  setAllowPromoCodes(Boolean(checked));
+                  if (!checked) {
+                    setPromoMode("none");
+                    setPromotionCodeId("");
+                    setCustomPromoCode("");
+                  } else {
+                    setPromoMode("existing");
+                  }
+                }}
+              />
+              Allow promo codes
+            </label>
+
+            {allowPromoCodes && (
+              <div className="grid gap-6 md:grid-cols-2">
+                <Field label="Promo code">
+                  <Select
+                    value={promoMode === "none" ? "existing" : promoMode}
+                    onValueChange={(value) => setPromoMode(value as PromoMode)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="existing">Use existing Stripe promo code</SelectItem>
+                      <SelectItem value="custom">Create custom promo code</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                {promoMode === "existing" && (
+                  <Field label="Existing Stripe promo code">
+                    <Select value={promotionCodeId} onValueChange={setPromotionCodeId}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select promo code" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {catalog.data?.promotionCodes.map((code) => (
+                          <SelectItem key={code.id} value={code.id}>
+                            {code.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                )}
+              </div>
+            )}
+            {allowPromoCodes && promoMode === "custom" && (
+              <div className="grid gap-6 md:grid-cols-3">
+                <Field label="Custom promo code">
+                  <Input
+                    value={customPromoCode}
+                    onChange={(e) => setCustomPromoCode(e.target.value.toUpperCase())}
+                    placeholder="STAFF50"
+                    className="font-mono uppercase"
+                  />
+                </Field>
+                <Field label="Custom promo type">
+                  <Select
+                    value={customPromoType}
+                    onValueChange={(value) => setCustomPromoType(value as CustomPromoType)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="percentage">Percentage off</SelectItem>
+                      <SelectItem value="fixed">Fixed amount off</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label="Custom promo value">
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={customPromoValue}
+                    onChange={(e) => setCustomPromoValue(e.target.value)}
+                    placeholder={customPromoType === "percentage" ? "50" : "500"}
+                  />
+                </Field>
+              </div>
             )}
           </div>
-
-          {promoMode === "custom" && (
-            <div className="grid gap-6 md:grid-cols-3">
-              <Field label="Custom promo code">
-                <Input
-                  value={customPromoCode}
-                  onChange={(e) => setCustomPromoCode(e.target.value.toUpperCase())}
-                  placeholder="STAFF50"
-                  className="font-mono uppercase"
-                />
-              </Field>
-              <Field label="Custom promo type">
-                <Select
-                  value={customPromoType}
-                  onValueChange={(value) => setCustomPromoType(value as CustomPromoType)}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="percentage">Percentage off</SelectItem>
-                    <SelectItem value="fixed">Fixed amount off</SelectItem>
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field label="Custom promo value">
-                <Input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={customPromoValue}
-                  onChange={(e) => setCustomPromoValue(e.target.value)}
-                  placeholder={customPromoType === "percentage" ? "50" : "500"}
-                />
-              </Field>
-            </div>
-          )}
 
           <div className="space-y-3">
             <Field label="Momence member">

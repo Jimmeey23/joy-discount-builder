@@ -5,9 +5,16 @@ import type { Json, Tables } from "@/integrations/supabase/types";
 import type Stripe from "stripe";
 
 type PaymentLinkRow = Tables<"stripe_payment_links">;
+type MomenceTokenCache = {
+  accessToken: string;
+  accessTokenExpiresAt: number;
+  refreshToken: string;
+  refreshTokenExpiresAt: number;
+};
 
 const APPROVAL_EMAIL = "jimmeey@physique57india.com";
 const STABLE_PUBLIC_URL = "https://project--5d498845-315c-4003-af46-2a005cd23f71.lovable.app";
+let momenceTokenCache: MomenceTokenCache | null = null;
 
 function getBaseUrl() {
   const override = process.env.PUBLIC_APP_URL;
@@ -81,6 +88,35 @@ function productId(product: string | Stripe.Product | Stripe.DeletedProduct | nu
   if (typeof product === "string") return product;
   if (product && typeof product === "object" && "id" in product) return product.id;
   return null;
+}
+
+function isMumbaiStripePrice(price: Stripe.Price) {
+  const product = price.product;
+  const productObject =
+    product && typeof product === "object" && !("deleted" in product) ? product : null;
+  const haystack = [
+    productObject?.name,
+    productObject?.description,
+    productObject?.metadata?.location,
+    productObject?.metadata?.city,
+    productObject?.metadata?.studio,
+    price.nickname,
+    price.metadata?.location,
+    price.metadata?.city,
+    price.metadata?.studio,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return (
+    haystack.includes("mumbai") ||
+    haystack.includes("bandra") ||
+    haystack.includes("kemps") ||
+    haystack.includes("kwality") ||
+    haystack.includes("courtside") ||
+    haystack.includes("supreme")
+  );
 }
 
 const CreatePaymentLinkSchema = z
@@ -244,6 +280,7 @@ export const listStripeCatalog = createServerFn({ method: "GET" }).handler(async
   return {
     products: prices.data
       .filter((price) => price.unit_amount !== null)
+      .filter(isMumbaiStripePrice)
       .map((price) => ({
         priceId: price.id,
         productId: productId(price.product),
@@ -276,8 +313,84 @@ export const listStripeCatalog = createServerFn({ method: "GET" }).handler(async
   };
 });
 
-function momenceToken() {
-  return process.env.MOMENCE_API_ACCESS_TOKEN || process.env.MOMENCE_BEARER_TOKEN || "";
+function momenceBasicAuthHeader() {
+  const clientId = process.env.MOMENCE_CLIENT_ID;
+  const clientSecret = process.env.MOMENCE_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    throw new Error("MOMENCE_CLIENT_ID and MOMENCE_CLIENT_SECRET are required");
+  }
+  return `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
+}
+
+async function requestMomenceToken(params: URLSearchParams) {
+  const res = await fetch("https://api.momence.com/api/v2/auth/token", {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/x-www-form-urlencoded",
+      Authorization: momenceBasicAuthHeader(),
+    },
+    body: params,
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(`Momence auth ${res.status}: ${JSON.stringify(body)}`);
+  }
+  const accessToken = String(body?.access_token ?? body?.accessToken ?? "");
+  const refreshToken = String(body?.refresh_token ?? body?.refreshToken ?? "");
+  const accessTokenExpiresAt = Date.parse(String(body?.accessTokenExpiresAt ?? ""));
+  const refreshTokenExpiresAt = Date.parse(String(body?.refreshTokenExpiresAt ?? ""));
+  if (!accessToken || !refreshToken || Number.isNaN(accessTokenExpiresAt)) {
+    throw new Error("Momence auth response did not include usable tokens");
+  }
+  momenceTokenCache = {
+    accessToken,
+    refreshToken,
+    accessTokenExpiresAt,
+    refreshTokenExpiresAt: Number.isNaN(refreshTokenExpiresAt) ? 0 : refreshTokenExpiresAt,
+  };
+  return momenceTokenCache;
+}
+
+async function getMomenceAccessToken() {
+  const now = Date.now();
+  const refreshBufferMs = 5 * 60 * 1000;
+  if (momenceTokenCache && momenceTokenCache.accessTokenExpiresAt - now > refreshBufferMs) {
+    return momenceTokenCache.accessToken;
+  }
+
+  if (
+    momenceTokenCache?.refreshToken &&
+    (!momenceTokenCache.refreshTokenExpiresAt ||
+      momenceTokenCache.refreshTokenExpiresAt - now > refreshBufferMs)
+  ) {
+    try {
+      const token = await requestMomenceToken(
+        new URLSearchParams({
+          grant_type: "refresh_token",
+          refresh_token: momenceTokenCache.refreshToken,
+        }),
+      );
+      return token.accessToken;
+    } catch (error) {
+      console.error("Momence refresh token failed; falling back to password grant", error);
+    }
+  }
+
+  const username = process.env.MOMENCE_USERNAME;
+  const password = process.env.MOMENCE_PASSWORD;
+  if (!username || !password) {
+    throw new Error("MOMENCE_USERNAME and MOMENCE_PASSWORD are required");
+  }
+
+  const token = await requestMomenceToken(
+    new URLSearchParams({
+      grant_type: "password",
+      username,
+      password,
+    }),
+  );
+  return token.accessToken;
 }
 
 function memberItems(value: unknown): unknown[] {
@@ -295,8 +408,7 @@ export const searchMomenceMembers = createServerFn({ method: "GET" })
     z.object({ query: z.string().trim().min(1).max(100) }).parse(input),
   )
   .handler(async ({ data }) => {
-    const token = momenceToken();
-    if (!token) throw new Error("MOMENCE_API_ACCESS_TOKEN is not configured");
+    const token = await getMomenceAccessToken();
     const params = new URLSearchParams({
       page: "0",
       pageSize: "20",
