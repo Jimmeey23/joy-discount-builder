@@ -1,4 +1,4 @@
-import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
+import { createFileRoute, Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
 import { listDiscountRequests } from "@/lib/discount.functions";
@@ -29,12 +29,17 @@ export const Route = createFileRoute("/requests")({
 });
 
 function RequestsPage() {
+  const isChildRoute = useRouterState({
+    select: (state) => state.location.pathname !== "/requests",
+  });
   const fn = useServerFn(listDiscountRequests);
-  const { data, isLoading, refetch } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ["discount-requests"],
     queryFn: () => fn(),
     refetchInterval: 5000,
   });
+
+  if (isChildRoute) return <Outlet />;
 
   return (
     <div className="min-h-screen bg-muted/30">
@@ -114,7 +119,19 @@ function RequestsPage() {
               <tbody>
                 {(data.requests as RequestListRow[]).map((r) => (
                   <tr key={r.id} className="border-t hover:bg-muted/30 transition">
-                    <td className="px-5 py-3 font-mono font-medium">{r.code}</td>
+                    <td className="px-5 py-3 font-mono font-medium">
+                      {r.status === "approved" ? (
+                        r.code
+                      ) : (
+                        <Link
+                          to="/requests/$requestId/edit"
+                          params={{ requestId: r.id }}
+                          className="text-primary hover:underline"
+                        >
+                          {r.code}
+                        </Link>
+                      )}
+                    </td>
                     <td className="px-5 py-3 text-muted-foreground">
                       {r.discount_type === "percentage"
                         ? `${r.discount_value}%`
