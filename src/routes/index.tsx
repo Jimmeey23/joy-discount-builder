@@ -25,12 +25,8 @@ function Index() {
               %
             </div>
             <div>
-              <h1 className="text-base font-semibold leading-tight">
-                Momence Discount Codes
-              </h1>
-              <p className="text-xs text-muted-foreground">
-                Physique 57 India · approval workflow
-              </p>
+              <h1 className="text-base font-semibold leading-tight">Momence Discount Codes</h1>
+              <p className="text-xs text-muted-foreground">Physique 57 India · approval workflow</p>
             </div>
           </div>
           <nav className="flex items-center gap-1 text-sm">
@@ -49,6 +45,13 @@ function Index() {
             >
               Requests
             </Link>
+            <Link
+              to="/payment-links"
+              activeProps={{ className: "bg-accent text-accent-foreground" }}
+              className="px-3 py-1.5 rounded-md hover:bg-accent transition-colors"
+            >
+              Payment Links
+            </Link>
           </nav>
         </div>
       </header>
@@ -60,12 +63,10 @@ function Index() {
           >
             ← Back to requests
           </Link>
-          <h2 className="mt-3 text-3xl font-semibold tracking-tight">
-            Create new discount code
-          </h2>
+          <h2 className="mt-3 text-3xl font-semibold tracking-tight">Create new discount code</h2>
           <p className="mt-2 text-sm text-muted-foreground max-w-2xl">
-            Fill in the details below. Once submitted, an approval email is sent to
-            the admin. The discount code is created in Momence only after approval.
+            Fill in the details below. Once submitted, an approval email is sent to the admin. The
+            discount code is created in Momence only after approval.
           </p>
         </div>
         <DiscountForm />

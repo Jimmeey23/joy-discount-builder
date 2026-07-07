@@ -10,13 +10,21 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as RequestsRouteImport } from './routes/requests'
+import { Route as PaymentLinksRouteImport } from './routes/payment-links'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as RequestsRequestIdEditRouteImport } from './routes/requests.$requestId.edit'
+import { Route as ApiStripeWebhookRouteImport } from './routes/api/stripe/webhook'
+import { Route as ApiPublicStripePaymentLinkDecisionRouteImport } from './routes/api/public/stripe-payment-link.decision'
 import { Route as ApiPublicDiscountDecisionRouteImport } from './routes/api/public/discount.decision'
 
 const RequestsRoute = RequestsRouteImport.update({
   id: '/requests',
   path: '/requests',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PaymentLinksRoute = PaymentLinksRouteImport.update({
+  id: '/payment-links',
+  path: '/payment-links',
   getParentRoute: () => rootRouteImport,
 } as any)
 const IndexRoute = IndexRouteImport.update({
@@ -29,6 +37,17 @@ const RequestsRequestIdEditRoute = RequestsRequestIdEditRouteImport.update({
   path: '/$requestId/edit',
   getParentRoute: () => RequestsRoute,
 } as any)
+const ApiStripeWebhookRoute = ApiStripeWebhookRouteImport.update({
+  id: '/api/stripe/webhook',
+  path: '/api/stripe/webhook',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPublicStripePaymentLinkDecisionRoute =
+  ApiPublicStripePaymentLinkDecisionRouteImport.update({
+    id: '/api/public/stripe-payment-link/decision',
+    path: '/api/public/stripe-payment-link/decision',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPublicDiscountDecisionRoute =
   ApiPublicDiscountDecisionRouteImport.update({
     id: '/api/public/discount/decision',
@@ -38,48 +57,69 @@ const ApiPublicDiscountDecisionRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/payment-links': typeof PaymentLinksRoute
   '/requests': typeof RequestsRouteWithChildren
+  '/api/stripe/webhook': typeof ApiStripeWebhookRoute
   '/requests/$requestId/edit': typeof RequestsRequestIdEditRoute
   '/api/public/discount/decision': typeof ApiPublicDiscountDecisionRoute
+  '/api/public/stripe-payment-link/decision': typeof ApiPublicStripePaymentLinkDecisionRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/payment-links': typeof PaymentLinksRoute
   '/requests': typeof RequestsRouteWithChildren
+  '/api/stripe/webhook': typeof ApiStripeWebhookRoute
   '/requests/$requestId/edit': typeof RequestsRequestIdEditRoute
   '/api/public/discount/decision': typeof ApiPublicDiscountDecisionRoute
+  '/api/public/stripe-payment-link/decision': typeof ApiPublicStripePaymentLinkDecisionRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/payment-links': typeof PaymentLinksRoute
   '/requests': typeof RequestsRouteWithChildren
+  '/api/stripe/webhook': typeof ApiStripeWebhookRoute
   '/requests/$requestId/edit': typeof RequestsRequestIdEditRoute
   '/api/public/discount/decision': typeof ApiPublicDiscountDecisionRoute
+  '/api/public/stripe-payment-link/decision': typeof ApiPublicStripePaymentLinkDecisionRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/payment-links'
     | '/requests'
+    | '/api/stripe/webhook'
     | '/requests/$requestId/edit'
     | '/api/public/discount/decision'
+    | '/api/public/stripe-payment-link/decision'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/payment-links'
     | '/requests'
+    | '/api/stripe/webhook'
     | '/requests/$requestId/edit'
     | '/api/public/discount/decision'
+    | '/api/public/stripe-payment-link/decision'
   id:
     | '__root__'
     | '/'
+    | '/payment-links'
     | '/requests'
+    | '/api/stripe/webhook'
     | '/requests/$requestId/edit'
     | '/api/public/discount/decision'
+    | '/api/public/stripe-payment-link/decision'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  PaymentLinksRoute: typeof PaymentLinksRoute
   RequestsRoute: typeof RequestsRouteWithChildren
+  ApiStripeWebhookRoute: typeof ApiStripeWebhookRoute
   ApiPublicDiscountDecisionRoute: typeof ApiPublicDiscountDecisionRoute
+  ApiPublicStripePaymentLinkDecisionRoute: typeof ApiPublicStripePaymentLinkDecisionRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -89,6 +129,13 @@ declare module '@tanstack/react-router' {
       path: '/requests'
       fullPath: '/requests'
       preLoaderRoute: typeof RequestsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/payment-links': {
+      id: '/payment-links'
+      path: '/payment-links'
+      fullPath: '/payment-links'
+      preLoaderRoute: typeof PaymentLinksRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/': {
@@ -104,6 +151,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/requests/$requestId/edit'
       preLoaderRoute: typeof RequestsRequestIdEditRouteImport
       parentRoute: typeof RequestsRoute
+    }
+    '/api/stripe/webhook': {
+      id: '/api/stripe/webhook'
+      path: '/api/stripe/webhook'
+      fullPath: '/api/stripe/webhook'
+      preLoaderRoute: typeof ApiStripeWebhookRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/public/stripe-payment-link/decision': {
+      id: '/api/public/stripe-payment-link/decision'
+      path: '/api/public/stripe-payment-link/decision'
+      fullPath: '/api/public/stripe-payment-link/decision'
+      preLoaderRoute: typeof ApiPublicStripePaymentLinkDecisionRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/public/discount/decision': {
       id: '/api/public/discount/decision'
@@ -129,8 +190,12 @@ const RequestsRouteWithChildren = RequestsRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  PaymentLinksRoute: PaymentLinksRoute,
   RequestsRoute: RequestsRouteWithChildren,
+  ApiStripeWebhookRoute: ApiStripeWebhookRoute,
   ApiPublicDiscountDecisionRoute: ApiPublicDiscountDecisionRoute,
+  ApiPublicStripePaymentLinkDecisionRoute:
+    ApiPublicStripePaymentLinkDecisionRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
