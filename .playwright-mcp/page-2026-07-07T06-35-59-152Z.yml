@@ -1,0 +1,102 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - generic [ref=e6]: "%"
+          - generic [ref=e7]:
+            - heading "Momence Discount Codes" [level=1] [ref=e8]
+            - paragraph [ref=e9]: Physique 57 India · approval workflow
+        - navigation [ref=e10]:
+          - link "Create" [ref=e11] [cursor=pointer]:
+            - /url: /
+          - link "Requests" [ref=e12] [cursor=pointer]:
+            - /url: /requests
+          - link "Payment Links" [ref=e13] [cursor=pointer]:
+            - /url: /payment-links
+    - main [ref=e14]:
+      - generic [ref=e15]:
+        - heading "Stripe payment links" [level=2] [ref=e16]
+        - paragraph [ref=e17]: Create Stripe-hosted payment links from active account products and track payment status from Stripe webhooks.
+      - generic [ref=e18]:
+        - generic [ref=e19]:
+          - generic [ref=e20]: Links
+          - generic [ref=e21]: "0"
+        - generic [ref=e22]:
+          - generic [ref=e23]: Paid links
+          - generic [ref=e24]: "0"
+        - generic [ref=e25]:
+          - generic [ref=e26]: Payments
+          - generic [ref=e27]: "0"
+        - generic [ref=e28]:
+          - generic [ref=e29]: Revenue
+          - generic [ref=e30]: ₹0.00
+      - generic [ref=e31]:
+        - generic [ref=e32]:
+          - img [ref=e33]
+          - heading "Create payment link request" [level=3] [ref=e36]
+        - generic [ref=e37]:
+          - generic [ref=e38]: Stripe products
+          - generic [ref=e105]: STRIPE_SECRET_KEY is not configured
+          - generic [ref=e39]:
+            - combobox [ref=e40] [cursor=pointer]:
+              - generic: Select product
+              - img [ref=e41]
+            - combobox [ref=e43]
+            - spinbutton [ref=e44]: "1"
+            - button "Remove" [disabled]
+          - button "Add product" [ref=e45] [cursor=pointer]
+        - generic [ref=e47]:
+          - checkbox "Allow promo codes" [ref=e48] [cursor=pointer]
+          - checkbox
+          - text: Allow promo codes
+        - generic [ref=e49]:
+          - generic [ref=e50]:
+            - generic [ref=e51]: Momence member
+            - textbox "Search Momence members by name, email, or phone" [active] [ref=e52]: an
+          - generic [ref=e106]: Searching Momence members...
+        - generic [ref=e53]:
+          - generic [ref=e54]:
+            - generic [ref=e55]: Customer email
+            - textbox "member@example.com" [ref=e56]
+          - generic [ref=e57]:
+            - generic [ref=e58]: Customer name
+            - textbox "Member name" [ref=e59]
+        - generic [ref=e60]:
+          - generic [ref=e61]:
+            - generic [ref=e62]: Purpose
+            - combobox [ref=e63] [cursor=pointer]:
+              - generic: Select purpose
+              - img [ref=e64]
+            - combobox [ref=e102]
+          - generic [ref=e67]:
+            - generic [ref=e68]: Created by
+            - combobox [ref=e69] [cursor=pointer]:
+              - generic: Select team member
+              - img [ref=e70]
+            - combobox [ref=e103]
+        - generic [ref=e73]:
+          - generic [ref=e74]: Description / payment details
+          - textbox "Details shown internally for approval, handoff, or reconciliation..." [ref=e75]
+        - generic [ref=e76]:
+          - generic [ref=e77]: Stripe custom fields
+          - button "Add custom field" [ref=e78] [cursor=pointer]
+        - generic [ref=e79]:
+          - generic [ref=e80]:
+            - generic [ref=e81]: UTM source
+            - textbox "source" [ref=e82]
+          - generic [ref=e83]:
+            - generic [ref=e84]: UTM medium
+            - textbox "medium" [ref=e85]
+          - generic [ref=e86]:
+            - generic [ref=e87]: UTM campaign
+            - textbox "campaign" [ref=e88]
+          - generic [ref=e89]:
+            - generic [ref=e90]: UTM term
+            - textbox "term" [ref=e91]
+          - generic [ref=e92]:
+            - generic [ref=e93]: UTM content
+            - textbox "content" [ref=e94]
+        - button "Submit for approval" [ref=e96] [cursor=pointer]
+      - generic [ref=e98]: No Stripe payment links created yet.
+  - region "Notifications alt+T"

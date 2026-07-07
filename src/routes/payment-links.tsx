@@ -524,10 +524,23 @@ function PaymentLinksPage() {
             <Field label="Momence member">
               <Input
                 value={memberQuery}
-                onChange={(e) => setMemberQuery(e.target.value)}
+                onChange={(e) => {
+                  setMemberQuery(e.target.value);
+                  setSelectedMember(null);
+                }}
                 placeholder="Search Momence members by name, email, or phone"
               />
             </Field>
+            {memberQuery.trim().length > 0 && memberQuery.trim().length < 2 && (
+              <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+                Type at least 2 characters to search Momence members.
+              </div>
+            )}
+            {memberSearch.isFetching && (
+              <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+                Searching Momence members...
+              </div>
+            )}
             {memberSearch.error && (
               <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
                 {memberSearch.error instanceof Error
@@ -555,6 +568,12 @@ function PaymentLinksPage() {
                     </span>
                   </button>
                 ))}
+              </div>
+            ) : memberQuery.trim().length >= 2 &&
+              !memberSearch.isFetching &&
+              !memberSearch.error ? (
+              <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+                No Momence members matched this search.
               </div>
             ) : null}
             {selectedMember && (

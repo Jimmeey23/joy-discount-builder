@@ -400,9 +400,10 @@ function memberItems(value: unknown): unknown[] {
   if (Array.isArray(value)) return value;
   if (!value || typeof value !== "object") return [];
   const obj = value as Record<string, unknown>;
-  for (const key of ["data", "items", "results", "members"]) {
+  for (const key of ["payload", "data", "items", "results", "members"]) {
     if (Array.isArray(obj[key])) return obj[key];
   }
+  if (obj.data && typeof obj.data === "object") return memberItems(obj.data);
   return [];
 }
 
