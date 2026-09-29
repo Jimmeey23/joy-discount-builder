@@ -14,6 +14,8 @@
  * honoured as an override when set.
  */
 
+import { supabaseAdmin } from "@/integrations/supabase/client.server";
+
 export const MOMENCE_HOST_ID = 13752;
 
 const USER_AGENT =
@@ -27,8 +29,11 @@ const DEVICE_DATA = {
   screen: { width: 1470, height: 956 },
 };
 
-/** Momence sessions outlive this comfortably; re-login is cheap insurance. */
-const COOKIE_TTL_MS = 30 * 60 * 1000;
+/**
+ * How long a cookie is reused without re-checking. A rejected cookie triggers a
+ * refresh anyway, so this only bounds how stale the in-process copy gets.
+ */
+const COOKIE_TTL_MS = 6 * 60 * 60 * 1000;
 
 export const MOMENCE_SESSION_EXPIRED =
   "Momence sign-in failed. Check MOMENCE_USERNAME, MOMENCE_PASSWORD and MOMENCE_TOTP_SECRET — the account's password or authenticator secret may have changed.";
@@ -116,6 +121,44 @@ function mergeCookies(...groups: string[][]) {
   return merged.join("; ");
 }
 
+export class MomenceRateLimitError extends Error {
+  constructor() {
+    super(
+      "Momence is rate-limiting sign-in attempts. Wait for the limit to clear, then try again — no MFA code was accepted.",
+    );
+    this.name = "MomenceRateLimitError";
+  }
+}
+
+/** The trusted-device cookie, which is what lets a later sign-in skip MFA. */
+function deviceCookieFrom(cookie: string) {
+  return (
+    cookie
+      .split(";")
+      .map((part) => part.trim())
+      .find((part) => part.startsWith("momence.device.id=")) ?? null
+  );
+}
+
+async function loadStoredSession() {
+  const { data, error } = await supabaseAdmin
+    .from("momence_session")
+    .select("cookie,device_cookie,signed_in_at")
+    .eq("id", "default")
+    .maybeSingle();
+  if (error) return null;
+  return data as { cookie: string; device_cookie: string | null; signed_in_at: string } | null;
+}
+
+async function storeSession(cookie: string, deviceCookie: string | null) {
+  await supabaseAdmin.from("momence_session").upsert({
+    id: "default",
+    cookie,
+    device_cookie: deviceCookie,
+    signed_in_at: new Date().toISOString(),
+  });
+}
+
 async function signIn(): Promise<string> {
   const email = process.env.MOMENCE_USERNAME;
   const password = process.env.MOMENCE_PASSWORD;
@@ -125,12 +168,21 @@ async function signIn(): Promise<string> {
     throw new Error("MOMENCE_USERNAME and MOMENCE_PASSWORD are required to sign in to Momence");
   }
 
+  // Present the previously trusted device, so Momence can skip MFA entirely.
+  const stored = await loadStoredSession();
+  const deviceCookie = stored?.device_cookie ?? null;
+
   const login = await fetch(LOGIN_URL, {
     method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json" },
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json",
+      ...(deviceCookie ? { cookie: deviceCookie } : {}),
+    },
     body: JSON.stringify({ email, password, deviceData: DEVICE_DATA }),
   });
 
+  if (login.status === 429) throw new MomenceRateLimitError();
   if (!login.ok) throw new MomenceSessionError(login.status);
 
   const loginCookies = readSetCookies(login);
@@ -138,8 +190,13 @@ async function signIn(): Promise<string> {
     verificationRequired?: boolean;
   } | null;
 
-  // No MFA step for this account/device: the login cookies are the session.
-  if (!loginBody?.verificationRequired) return mergeCookies(loginCookies);
+  // Trusted device: the login cookies already are the session, no MFA code
+  // spent.
+  if (!loginBody?.verificationRequired) {
+    const cookie = mergeCookies(deviceCookie ? [deviceCookie] : [], loginCookies);
+    await storeSession(cookie, deviceCookieFrom(cookie) ?? deviceCookie);
+    return cookie;
+  }
 
   if (!totpSecret) {
     throw new Error(
@@ -147,41 +204,64 @@ async function signIn(): Promise<string> {
     );
   }
 
-  // A code can land right on a step boundary, so retry with a fresh one.
-  let lastStatus = 401;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const mfa = await fetch(MFA_URL, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        accept: "application/json",
-        cookie: mergeCookies(loginCookies),
-      },
-      body: JSON.stringify({
-        token: await generateTotp(totpSecret),
-        deviceData: DEVICE_DATA,
-        trustDevice: true,
-      }),
+  // Momence rate-limits this endpoint hard, so spend exactly one code per
+  // sign-in. A wrong code means the secret is wrong, which retrying cannot fix.
+  const mfa = await fetch(MFA_URL, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json",
+      cookie: mergeCookies(deviceCookie ? [deviceCookie] : [], loginCookies),
+    },
+    body: JSON.stringify({
+      token: await generateTotp(totpSecret),
+      deviceData: DEVICE_DATA,
+      trustDevice: true,
+    }),
+  });
+
+  if (mfa.status === 429) throw new MomenceRateLimitError();
+  if (!mfa.ok) throw new MomenceSessionError(mfa.status);
+
+  const cookie = mergeCookies(
+    deviceCookie ? [deviceCookie] : [],
+    loginCookies,
+    readSetCookies(mfa),
+  );
+  await storeSession(cookie, deviceCookieFrom(cookie));
+  return cookie;
+}
+
+/** Serialises sign-ins so concurrent callers spend one MFA code between them. */
+let signInInFlight: Promise<string> | null = null;
+
+async function signInOnce() {
+  if (!signInInFlight) {
+    signInInFlight = signIn().finally(() => {
+      signInInFlight = null;
     });
-
-    if (mfa.ok) return mergeCookies(loginCookies, readSetCookies(mfa));
-
-    lastStatus = mfa.status;
-    await new Promise((resolve) => setTimeout(resolve, 1200));
   }
-
-  throw new MomenceSessionError(lastStatus);
+  return signInInFlight;
 }
 
 async function getCookie(forceRefresh = false) {
   const override = process.env.MOMENCE_COOKIE;
   if (override && !forceRefresh) return override;
 
-  if (!forceRefresh && cookieCache && Date.now() - cookieCache.mintedAt < COOKIE_TTL_MS) {
-    return cookieCache.cookie;
+  if (!forceRefresh) {
+    if (cookieCache && Date.now() - cookieCache.mintedAt < COOKIE_TTL_MS) {
+      return cookieCache.cookie;
+    }
+    // Reuse the session another instance signed in with, rather than minting a
+    // new one on every cold start.
+    const stored = await loadStoredSession();
+    if (stored?.cookie) {
+      cookieCache = { cookie: stored.cookie, mintedAt: Date.parse(stored.signed_in_at) };
+      return stored.cookie;
+    }
   }
 
-  const cookie = await signIn();
+  const cookie = await signInOnce();
   cookieCache = { cookie, mintedAt: Date.now() };
   return cookie;
 }

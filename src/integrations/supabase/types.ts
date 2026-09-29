@@ -95,6 +95,30 @@ export type Database = {
         };
         Relationships: [];
       };
+      momence_session: {
+        Row: {
+          cookie: string;
+          device_cookie: string | null;
+          id: string;
+          signed_in_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          cookie: string;
+          device_cookie?: string | null;
+          id?: string;
+          signed_in_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          cookie?: string;
+          device_cookie?: string | null;
+          id?: string;
+          signed_in_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
       payment_link_requests: {
         Row: {
           adjustable_quantity: boolean;

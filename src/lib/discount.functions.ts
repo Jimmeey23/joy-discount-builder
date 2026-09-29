@@ -208,7 +208,8 @@ function buildApprovalEmail(opts: {
           <a href="${rejectUrl}" style="display:inline-block;background:#ffffff;color:#dc2626;text-decoration:none;padding:12px 22px;border-radius:10px;font-weight:600;font-size:14px;border:1px solid #fecaca;margin-left:8px;">Reject</a>
         </div>
         <p style="margin:18px 0 0;color:#94a3b8;font-size:12px;line-height:1.6;">
-          Each link can only be used once. Approving will immediately create the discount code in Momence for host ${MOMENCE_HOST_ID}.
+          Approving will immediately create the discount code in Momence for host ${MOMENCE_HOST_ID}.
+          If it does not go through, this link keeps working — open it again to retry.
         </p>
       </div>
     </div>

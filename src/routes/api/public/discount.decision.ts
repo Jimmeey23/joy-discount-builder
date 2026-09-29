@@ -7,6 +7,7 @@ import {
   createMomenceDiscountCode,
   fetchMomenceDiscountCodes,
   MOMENCE_HOST_ID,
+  MomenceRateLimitError,
   MomenceSessionError,
 } from "@/lib/momence.server";
 const STATUS_NOTIFICATION_EMAIL = "info@physique57india.com";
@@ -46,6 +47,9 @@ function page(opts: {
   message: string;
   detail?: string;
   status?: "ok" | "error" | "info";
+  /** Shown when the outcome is retryable, so the approver can try again. */
+  retryUrl?: string;
+  retryLabel?: string;
 }) {
   const color =
     opts.status === "error" ? "#dc2626" : opts.status === "info" ? "#6366f1" : "#10b981";
@@ -56,6 +60,11 @@ function page(opts: {
     <div style="width:64px;height:64px;border-radius:50%;background:${color};color:#fff;font-size:32px;font-weight:700;display:flex;align-items:center;justify-content:center;margin:0 auto 18px;">${icon}</div>
     <h1 style="margin:0 0 8px;font-size:22px;color:#0f172a;">${opts.title}</h1>
     <p style="margin:0;color:#475569;font-size:14px;line-height:1.6;">${opts.message}</p>
+    ${
+      opts.retryUrl
+        ? `<div style="margin-top:24px;"><a href="${opts.retryUrl}" style="display:inline-block;background:#10b981;color:#fff;text-decoration:none;padding:12px 22px;border-radius:10px;font-weight:600;font-size:14px;">${opts.retryLabel ?? "Try again"}</a></div>`
+        : ""
+    }
     ${opts.detail ? `<pre style="margin-top:18px;padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;font-size:12px;color:#475569;text-align:left;white-space:pre-wrap;word-break:break-word;">${opts.detail}</pre>` : ""}
   </div>
 </body></html>`;
@@ -446,9 +455,11 @@ export const Route = createFileRoute("/api/public/discount/decision")({
             return html(
               page({
                 title: "Momence returned an error",
-                message: `Approval recorded, but Momence rejected the discount creation (HTTP ${result.status}).`,
+                message: `No code was created — Momence rejected the request (HTTP ${result.status}). "${row.code}" can be approved again once the cause is resolved.`,
                 detail: JSON.stringify(result.body, null, 2),
                 status: "error",
+                retryUrl: actionUrl(token, "approve"),
+                retryLabel: "Try approving again",
               }),
               502,
             );
@@ -476,7 +487,10 @@ export const Route = createFileRoute("/api/public/discount/decision")({
             }),
           );
         } catch (e: unknown) {
-          const sessionExpired = e instanceof MomenceSessionError;
+          const rateLimited = e instanceof MomenceRateLimitError;
+          // Neither a dead session nor a rate limit says anything about this
+          // request, so it stays pending and the link keeps working.
+          const sessionExpired = e instanceof MomenceSessionError || rateLimited;
 
           await supabaseAdmin
             .from("discount_requests")
@@ -490,12 +504,20 @@ export const Route = createFileRoute("/api/public/discount/decision")({
 
           return html(
             page({
-              title: sessionExpired ? "Momence session expired" : "Failed to create code",
-              message: sessionExpired
-                ? `No code was created and "${row.code}" is still pending. Momence sign-in failed — check MOMENCE_USERNAME, MOMENCE_PASSWORD and MOMENCE_TOTP_SECRET, then open this approval link again.`
-                : "The Momence API call failed.",
+              title: rateLimited
+                ? "Momence is rate-limiting sign-in"
+                : sessionExpired
+                  ? "Momence session expired"
+                  : "Failed to create code",
+              message: rateLimited
+                ? `No code was created and "${row.code}" is still pending. Momence is temporarily refusing sign-in attempts — wait a few minutes and open this approval link again. Nothing is wrong with the request or the credentials.`
+                : sessionExpired
+                  ? `No code was created and "${row.code}" is still pending. Momence sign-in failed — check MOMENCE_USERNAME, MOMENCE_PASSWORD and MOMENCE_TOTP_SECRET, then open this approval link again.`
+                  : "The Momence API call failed.",
               detail: errorMessage(e),
               status: "error",
+              retryUrl: actionUrl(token, "approve"),
+              retryLabel: "Try approving again",
             }),
             sessionExpired ? 503 : 500,
           );
