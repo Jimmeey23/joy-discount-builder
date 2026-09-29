@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { Check, ChevronDown, Search, X } from "lucide-react";
-import { submitDiscountRequest, updateDiscountRequest } from "@/lib/discount.functions";
+import {
+  checkDiscountCodeAvailability,
+  submitDiscountRequest,
+  updateDiscountRequest,
+} from "@/lib/discount.functions";
 import type { Tables } from "@/integrations/supabase/types";
 import { MEMBERSHIPS } from "@/data/memberships";
 import { ASSOCIATES, LOCATIONS, DISCOUNT_REASONS } from "@/data/constants";
@@ -232,10 +236,12 @@ function toDatetimeLocal(value: string | null) {
 export function DiscountForm({ initialRequest }: { initialRequest?: DiscountRequestRow }) {
   const navigate = useNavigate();
   const submit = useServerFn(submitDiscountRequest);
+  const checkCode = useServerFn(checkDiscountCodeAvailability);
   const update = useServerFn(updateDiscountRequest);
   const isEdit = Boolean(initialRequest);
 
   const [code, setCode] = useState("");
+  const [debouncedCode, setDebouncedCode] = useState("");
   const [discountType, setDiscountType] = useState<DiscountType>("percentage");
   const [discountValue, setDiscountValue] = useState<string>("");
   const [usageLimitType, setUsageLimitType] = useState<LimitType>("unlimited");
@@ -271,6 +277,32 @@ export function DiscountForm({ initialRequest }: { initialRequest?: DiscountRequ
     setDescription(initialRequest.description ?? "");
     setRequestedBy(initialRequest.requested_by ?? "");
   }, [initialRequest]);
+
+  // Debounce so a check fires once the operator stops typing, not per keypress.
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedCode(code.trim()), 400);
+    return () => clearTimeout(timer);
+  }, [code]);
+
+  const availability = useQuery({
+    queryKey: ["discount-code-availability", debouncedCode, initialRequest?.id ?? null],
+    queryFn: () =>
+      checkCode({
+        data: {
+          code: debouncedCode,
+          ...(initialRequest?.id ? { requestId: initialRequest.id } : {}),
+        },
+      }),
+    enabled: debouncedCode.length > 0,
+    staleTime: 15_000,
+  });
+
+  // Only trust a result that describes the code currently in the field.
+  const codeStatus =
+    availability.data && availability.data.code === code.trim().toUpperCase()
+      ? availability.data
+      : null;
+  const codeIsTaken = codeStatus ? !codeStatus.available : false;
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -340,6 +372,7 @@ export function DiscountForm({ initialRequest }: { initialRequest?: DiscountRequ
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!code.trim()) return toast.error("Please enter a discount code");
+    if (codeIsTaken) return toast.error(codeStatus?.message ?? "This code is already in use");
     if (!discountValue || Number(discountValue) <= 0)
       return toast.error("Please enter a discount value");
     if (!TWO_DECIMAL_VALUE.test(discountValue))
@@ -370,9 +403,32 @@ export function DiscountForm({ initialRequest }: { initialRequest?: DiscountRequ
             value={code}
             onChange={(e) => setCode(e.target.value.toUpperCase())}
             placeholder="FREE20"
-            className="font-mono uppercase"
+            className={cn("font-mono uppercase", codeIsTaken && "border-destructive")}
+            aria-invalid={codeIsTaken}
             required
           />
+          {debouncedCode && availability.isFetching && !codeStatus && (
+            <p className="mt-1.5 text-xs text-muted-foreground">Checking availability...</p>
+          )}
+          {codeStatus && (
+            <p
+              className={cn(
+                "mt-1.5 text-xs",
+                codeStatus.available
+                  ? codeStatus.momenceChecked
+                    ? "text-emerald-700"
+                    : "text-amber-700"
+                  : "text-destructive",
+              )}
+            >
+              {codeStatus.message}
+            </p>
+          )}
+          {availability.error && (
+            <p className="mt-1.5 text-xs text-amber-700">
+              Could not check whether this code already exists.
+            </p>
+          )}
         </div>
 
         <div className="grid md:grid-cols-2 gap-6">

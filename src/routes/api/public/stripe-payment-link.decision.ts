@@ -3,7 +3,7 @@ import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { createApprovedStripePaymentLink } from "@/lib/stripe-payment-links.functions";
 import type { Tables } from "@/integrations/supabase/types";
 
-type PaymentLinkRow = Tables<"stripe_payment_links">;
+type PaymentLinkRow = Tables<"payment_link_requests">;
 
 function page(opts: {
   title: string;
@@ -32,11 +32,11 @@ function html(body: string, status = 200) {
   });
 }
 
-function money(amount: number, currency: string) {
+function money(amount: number | null, currency: string | null) {
   return new Intl.NumberFormat("en-IN", {
     style: "currency",
-    currency: currency.toUpperCase(),
-  }).format(amount / 100);
+    currency: (currency ?? "inr").toUpperCase(),
+  }).format((amount ?? 0) / 100);
 }
 
 function escapeHtml(s: string) {
@@ -71,7 +71,7 @@ function normalizedItems(row: PaymentLinkRow) {
 
 async function findDuplicate(row: PaymentLinkRow) {
   const { data, error } = await supabaseAdmin
-    .from("stripe_payment_links")
+    .from("payment_link_requests")
     .select("*")
     .neq("id", row.id)
     .eq("requested_amount", row.requested_amount)
@@ -95,7 +95,7 @@ function duplicatePrompt(row: PaymentLinkRow, token: string, duplicate: PaymentL
   <div style="background:#fff;border:1px solid #e2e8f0;border-radius:18px;padding:34px;max-width:680px;width:100%;box-shadow:0 4px 24px rgba(15,23,42,0.06);">
     <div style="width:56px;height:56px;border-radius:50%;background:#6366f1;color:#fff;font-size:28px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-bottom:18px;">i</div>
     <h1 style="margin:0 0 8px;font-size:22px;color:#0f172a;">Matching payment link found</h1>
-    <p style="margin:0 0 18px;color:#475569;font-size:14px;line-height:1.6;">A Stripe payment link already exists for ${escapeHtml(row.product_name)} at ${escapeHtml(money(row.requested_amount, row.currency))} with the same promo setup.</p>
+    <p style="margin:0 0 18px;color:#475569;font-size:14px;line-height:1.6;">A Stripe payment link already exists for ${escapeHtml(row.product_name ?? "Stripe product")} at ${escapeHtml(money(row.requested_amount, row.currency))} with the same promo setup.</p>
     <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:14px;font-size:14px;color:#334155;word-break:break-all;">${escapeHtml(duplicate.stripe_payment_link_url ?? "Existing link")}</div>
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:24px;">
       <a href="${useExistingUrl}" style="display:inline-block;background:#10b981;color:#fff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:600;font-size:14px;">Use existing link</a>
@@ -127,7 +127,7 @@ export const Route = createFileRoute("/api/public/stripe-payment-link/decision")
 
         const column = action === "reject" ? "reject_token" : "approve_token";
         const { data: row, error } = await supabaseAdmin
-          .from("stripe_payment_links")
+          .from("payment_link_requests")
           .select("*")
           .eq(column, token)
           .maybeSingle();
@@ -155,7 +155,7 @@ export const Route = createFileRoute("/api/public/stripe-payment-link/decision")
 
         if (action === "reject") {
           await supabaseAdmin
-            .from("stripe_payment_links")
+            .from("payment_link_requests")
             .update({ status: "rejected" })
             .eq("id", row.id);
           return html(
@@ -171,14 +171,14 @@ export const Route = createFileRoute("/api/public/stripe-payment-link/decision")
           const existingId = url.searchParams.get("existingId");
           const { data: existing } = existingId
             ? await supabaseAdmin
-                .from("stripe_payment_links")
+                .from("payment_link_requests")
                 .select("*")
                 .eq("id", existingId)
                 .maybeSingle()
             : { data: null };
 
           await supabaseAdmin
-            .from("stripe_payment_links")
+            .from("payment_link_requests")
             .update({
               status: "approved",
               approved_at: new Date().toISOString(),
@@ -217,7 +217,7 @@ export const Route = createFileRoute("/api/public/stripe-payment-link/decision")
           );
         } catch (e: unknown) {
           await supabaseAdmin
-            .from("stripe_payment_links")
+            .from("payment_link_requests")
             .update({
               status: "failed",
               error_message: errorMessage(e),

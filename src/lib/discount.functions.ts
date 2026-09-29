@@ -3,6 +3,12 @@ import { getRequestHost, getRequestHeader } from "@tanstack/react-start/server";
 import { z } from "zod";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import type { Tables } from "@/integrations/supabase/types";
+import { fetchMomenceDiscountCodes, momenceCodeSet } from "@/lib/momence.server";
+import {
+  normaliseCode,
+  resolveAvailability,
+  type LocalCodeMatch,
+} from "@/lib/discount-code-availability";
 
 const APPROVAL_EMAIL = "jimmeey@physique57india.com";
 const MOMENCE_HOST_ID = 13752;
@@ -220,10 +226,66 @@ Reject:  ${rejectUrl}`;
   return { html, text };
 }
 
+/**
+ * Is this code still free? Checked against codes this app has already
+ * requested and against Momence itself. Momence being unreachable (an expired
+ * session cookie) degrades the answer rather than failing it, so a code can
+ * still be requested while that is being fixed.
+ */
+async function checkCodeAvailability(code: string, ignoreRequestId?: string) {
+  const normalised = normaliseCode(code);
+
+  let query = supabaseAdmin
+    .from("discount_requests")
+    .select("code,status")
+    .ilike("code", normalised);
+  if (ignoreRequestId) query = query.neq("id", ignoreRequestId);
+
+  const { data: rows, error } = await query;
+  if (error) throw new Error(error.message);
+
+  let momenceCodes: Set<string> | null = null;
+  try {
+    momenceCodes = momenceCodeSet(await fetchMomenceDiscountCodes());
+  } catch (e) {
+    console.error("Momence availability check failed", e);
+    momenceCodes = null;
+  }
+
+  return resolveAvailability({
+    code: normalised,
+    localMatches: (rows ?? []) as LocalCodeMatch[],
+    momenceCodes,
+  });
+}
+
+export const checkDiscountCodeAvailability = createServerFn({ method: "GET" })
+  .inputValidator((input: unknown) =>
+    z
+      .object({ code: z.string().trim().max(64), requestId: z.string().uuid().optional() })
+      .parse(input),
+  )
+  .handler(async ({ data }) => {
+    if (!data.code.trim()) {
+      return {
+        code: "",
+        available: false,
+        takenBy: null,
+        momenceChecked: false,
+        message: "Enter a discount code.",
+      };
+    }
+    return checkCodeAvailability(data.code, data.requestId);
+  });
+
 export const submitDiscountRequest = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) => SubmitSchema.parse(input))
   .handler(async ({ data }) => {
     const baseUrl = getBaseUrl();
+
+    // Re-check server side: the form check can be stale by the time it submits.
+    const availability = await checkCodeAvailability(data.code);
+    if (!availability.available) throw new Error(availability.message);
 
     const { data: row, error } = await supabaseAdmin
       .from("discount_requests")

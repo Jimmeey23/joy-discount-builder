@@ -50,7 +50,7 @@ export const Route = createFileRoute("/api/stripe/webhook")({
           const amountPaid = session.amount_total ?? 0;
           const sessionId = session.id;
 
-          const query = supabaseAdmin.from("stripe_payment_links").select("*");
+          const query = supabaseAdmin.from("payment_link_requests").select("*");
           const { data: row, error } = localId
             ? await query.eq("id", localId).maybeSingle()
             : paymentLinkId
@@ -73,7 +73,7 @@ export const Route = createFileRoute("/api/stripe/webhook")({
             }
 
             const { error: updateError } = await supabaseAdmin
-              .from("stripe_payment_links")
+              .from("payment_link_requests")
               .update({
                 status: "paid",
                 payment_count: alreadyTracked ? row.payment_count : row.payment_count + 1,

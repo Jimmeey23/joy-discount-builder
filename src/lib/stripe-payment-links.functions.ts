@@ -2,9 +2,15 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import type { Json, Tables } from "@/integrations/supabase/types";
+import {
+  describePromotion,
+  summarisePricing,
+  type PricingItem,
+  type PromotionSummary,
+} from "@/lib/payment-link-pricing";
 import type Stripe from "stripe";
 
-type PaymentLinkRow = Tables<"stripe_payment_links">;
+type PaymentLinkRow = Tables<"payment_link_requests">;
 type MomenceTokenCache = {
   accessToken: string;
   accessTokenExpiresAt: number;
@@ -90,6 +96,22 @@ function productId(product: string | Stripe.Product | Stripe.DeletedProduct | nu
   return null;
 }
 
+/**
+ * Stripe moved the coupon on a promotion code: older API versions embed
+ * `coupon`, 2026-02-25.clover nests it under `promotion.coupon`. Read whichever
+ * this account's API version returns.
+ */
+function resolveCoupon(promotionCode: unknown): Stripe.Coupon | null {
+  const record = promotionCode as {
+    coupon?: unknown;
+    promotion?: { coupon?: unknown } | null;
+  };
+  const candidate = record?.promotion?.coupon ?? record?.coupon;
+  if (!candidate || typeof candidate !== "object") return null;
+  if ("deleted" in candidate) return null;
+  return candidate as Stripe.Coupon;
+}
+
 function isMumbaiStripePrice(price: Stripe.Price) {
   const product = price.product;
   const productObject =
@@ -162,8 +184,34 @@ const CreatePaymentLinkSchema = z
       .optional(),
     purpose: z.string().max(500).optional().nullable(),
     createdBy: z.string().max(120).optional().nullable(),
+    internalNote: z.string().max(1000).optional().nullable(),
+    customerPhone: z.string().max(40).optional().nullable(),
+    collectAddress: z.boolean().optional(),
+    collectPhone: z.boolean().optional(),
+    singleUse: z.boolean().optional(),
+    adjustableQuantity: z.boolean().optional(),
+    allowPromotionCodes: z.boolean().optional(),
+    maxRedemptions: z.number().int().min(1).max(1000000).optional().nullable(),
+    linkExpiresAt: z.string().datetime({ offset: true }).optional().nullable(),
+    afterCompletionType: z.enum(["redirect", "message"]).optional(),
+    afterCompletionMessage: z.string().max(500).optional().nullable(),
+    afterCompletionRedirectUrl: z.string().url().max(500).optional().nullable(),
   })
   .superRefine((data, ctx) => {
+    if (data.afterCompletionType === "message" && !data.afterCompletionMessage?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Enter the confirmation message shown after payment",
+        path: ["afterCompletionMessage"],
+      });
+    }
+    if (data.linkExpiresAt && new Date(data.linkExpiresAt).getTime() <= Date.now()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Expiry must be in the future",
+        path: ["linkExpiresAt"],
+      });
+    }
     if (data.promoMode === "existing" && !data.promotionCodeId) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -225,6 +273,10 @@ async function buildPaymentLinkRequestPayload(
   }));
   const first = enrichedItems[0];
   const total = enrichedItems.reduce((sum, item) => sum + item.amount, 0);
+  const promotionSnapshot =
+    data.promoMode === "existing" && data.promotionCodeId
+      ? await fetchPromotionSummary(stripe, data.promotionCodeId)
+      : null;
 
   return {
     stripe_price_id: first.priceId,
@@ -251,7 +303,100 @@ async function buildPaymentLinkRequestPayload(
     utm_parameters: toJson(data.utm ?? {}),
     purpose: data.purpose || null,
     created_by: data.createdBy || null,
+    internal_note: data.internalNote || null,
+    customer_phone: data.customerPhone || null,
+    collect_address: data.collectAddress ?? false,
+    collect_phone: data.collectPhone ?? false,
+    single_use: data.singleUse ?? false,
+    adjustable_quantity: data.adjustableQuantity ?? false,
+    allow_promotion_codes: data.allowPromotionCodes ?? false,
+    max_redemptions: data.maxRedemptions ?? null,
+    link_expires_at: data.linkExpiresAt ?? null,
+    after_completion_type: data.afterCompletionType ?? "redirect",
+    after_completion_message: data.afterCompletionMessage || null,
+    after_completion_redirect_url: data.afterCompletionRedirectUrl || null,
+    promotion_code_snapshot: promotionSnapshot ? toJson(promotionSnapshot) : null,
   };
+}
+
+/**
+ * Snapshot of a promotion code at request time, so the approval email and the
+ * links list can show the discount without another Stripe round trip.
+ */
+async function fetchPromotionSummary(
+  stripe: Awaited<ReturnType<typeof stripeClient>>,
+  promotionCodeId: string,
+): Promise<PromotionSummary | null> {
+  try {
+    const promo = await stripe.promotionCodes.retrieve(promotionCodeId, {
+      expand: ["promotion.coupon"],
+    });
+    const couponObject = resolveCoupon(promo);
+    return {
+      id: promo.id,
+      code: promo.code,
+      couponId: couponObject?.id ?? "",
+      percentOff: couponObject?.percent_off ?? null,
+      amountOff: couponObject?.amount_off ?? null,
+      currency: couponObject?.currency ?? null,
+      duration: couponObject?.duration ?? null,
+      active: promo.active,
+      timesRedeemed: promo.times_redeemed ?? 0,
+      maxRedemptions: promo.max_redemptions ?? null,
+      expiresAt: promo.expires_at ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Promotion snapshot stored on a row, or one reconstructed from a custom promo. */
+export function rowPromotion(row: PaymentLinkRow): PromotionSummary | null {
+  const snapshot = row.promotion_code_snapshot;
+  if (snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)) {
+    return snapshot as unknown as PromotionSummary;
+  }
+  if (!row.promotion_code) return null;
+  return {
+    id: row.custom_promotion_code_id ?? row.promotion_code_id ?? "",
+    code: row.promotion_code,
+    couponId: row.custom_coupon_id ?? "",
+    percentOff:
+      row.custom_promo_type === "percentage" && row.custom_promo_value
+        ? Number(row.custom_promo_value)
+        : null,
+    amountOff:
+      row.custom_promo_type === "fixed" && row.custom_promo_value
+        ? Math.round(Number(row.custom_promo_value) * 100)
+        : null,
+    currency: row.currency,
+    duration: "once",
+    active: true,
+    timesRedeemed: 0,
+    maxRedemptions: null,
+    expiresAt: null,
+  };
+}
+
+/** Subtotal / discount / total for a saved row, used by the email and the lists. */
+export function rowPricing(row: PaymentLinkRow) {
+  const items = Array.isArray(row.line_items)
+    ? (row.line_items as Array<{ unitAmount?: number; quantity?: number; currency?: string }>).map(
+        (item): PricingItem => ({
+          unitAmount: item.unitAmount ?? 0,
+          quantity: item.quantity ?? 1,
+          currency: item.currency ?? row.currency ?? "inr",
+        }),
+      )
+    : [
+        {
+          unitAmount: row.unit_amount ?? 0,
+          quantity: row.quantity ?? 1,
+          currency: row.currency ?? "inr",
+        },
+      ];
+
+  return summarisePricing({ items, promotion: rowPromotion(row) });
 }
 
 export const listStripeCatalog = createServerFn({ method: "GET" }).handler(async () => {
@@ -265,7 +410,8 @@ export const listStripeCatalog = createServerFn({ method: "GET" }).handler(async
     stripe.promotionCodes.list({
       active: true,
       limit: 100,
-      expand: ["data.coupon"],
+      // API version 2026-02-25.clover nests the coupon under `promotion`.
+      expand: ["data.promotion.coupon"],
     }),
   ]);
 
@@ -293,23 +439,23 @@ export const listStripeCatalog = createServerFn({ method: "GET" }).handler(async
           : null,
       })),
     promotionCodes: promotionCodes.map((code) => {
-      const coupon = code.coupon;
-      if (!coupon || typeof coupon !== "object" || "deleted" in coupon) {
-        return {
-          id: code.id,
-          code: code.code,
-          couponId: typeof coupon === "string" ? coupon : "",
-          label: code.code,
-        };
-      }
-      return {
+      const couponObject = resolveCoupon(code);
+
+      const summary: PromotionSummary = {
         id: code.id,
         code: code.code,
-        couponId: coupon.id,
-        label: coupon.percent_off
-          ? `${code.code} · ${coupon.percent_off}% off`
-          : `${code.code} · ${money(coupon.amount_off ?? 0, coupon.currency ?? "inr")} off`,
+        couponId: couponObject?.id ?? "",
+        percentOff: couponObject?.percent_off ?? null,
+        amountOff: couponObject?.amount_off ?? null,
+        currency: couponObject?.currency ?? null,
+        duration: couponObject?.duration ?? null,
+        active: code.active,
+        timesRedeemed: code.times_redeemed ?? 0,
+        maxRedemptions: code.max_redemptions ?? null,
+        expiresAt: code.expires_at ?? null,
       };
+
+      return { ...summary, label: describePromotion(summary).label };
     }),
     promoLoadError:
       promotionCodesResult.status === "rejected" ? errorMessage(promotionCodesResult.reason) : null,
@@ -457,7 +603,7 @@ export const createStripePaymentLink = createServerFn({ method: "POST" })
     const payload = await buildPaymentLinkRequestPayload(stripe, data);
 
     const { data: row, error } = await supabaseAdmin
-      .from("stripe_payment_links")
+      .from("payment_link_requests")
       .insert(payload)
       .select()
       .single();
@@ -469,7 +615,7 @@ export const createStripePaymentLink = createServerFn({ method: "POST" })
     } catch (e: unknown) {
       const message = errorMessage(e);
       await supabaseAdmin
-        .from("stripe_payment_links")
+        .from("payment_link_requests")
         .update({ error_message: `Email send failed: ${message}` })
         .eq("id", row.id);
       return {
@@ -487,7 +633,7 @@ export const updateStripePaymentLinkRequest = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const stripe = await stripeClient();
     const { data: existing, error: fetchError } = await supabaseAdmin
-      .from("stripe_payment_links")
+      .from("payment_link_requests")
       .select("*")
       .eq("id", data.id)
       .maybeSingle();
@@ -500,7 +646,7 @@ export const updateStripePaymentLinkRequest = createServerFn({ method: "POST" })
 
     const payload = await buildPaymentLinkRequestPayload(stripe, data);
     const { data: row, error } = await supabaseAdmin
-      .from("stripe_payment_links")
+      .from("payment_link_requests")
       .update({
         ...payload,
         custom_coupon_id: null,
@@ -520,15 +666,40 @@ export const updateStripePaymentLinkRequest = createServerFn({ method: "POST" })
 function buildApprovalEmail(row: PaymentLinkRow, baseUrl: string) {
   const approveUrl = `${baseUrl}/api/public/stripe-payment-link/decision?token=${row.approve_token}&action=approve`;
   const rejectUrl = `${baseUrl}/api/public/stripe-payment-link/decision?token=${row.reject_token}&action=reject`;
+  const pricing = rowPricing(row);
+  const promotion = describePromotion(rowPromotion(row));
+  const currency = row.currency ?? "inr";
+
   const rows: Array<[string, string]> = [
-    ["Product", row.product_name],
-    ["Amount", money(row.requested_amount, row.currency)],
-    ["Quantity", String(row.quantity)],
-    ["Promo", row.promotion_code || row.promotion_code_id || "None"],
-    ["Customer", row.customer_email || row.customer_name || "Not specified"],
-    ["Created by", row.created_by || "Not specified"],
+    ["Product", row.product_name ?? "Stripe product"],
+    ["Quantity", String(row.quantity ?? 1)],
+    ["Subtotal", money(pricing.subtotal, currency)],
   ];
+
+  if (promotion.code) {
+    rows.push(["Promo code", promotion.discountLabel ? promotion.label : promotion.code]);
+  } else {
+    rows.push(["Promo code", "None"]);
+  }
+  if (pricing.discountAmount > 0) {
+    rows.push([
+      "Discount",
+      `− ${money(pricing.discountAmount, currency)}${
+        pricing.discountLabel ? ` (${pricing.discountLabel})` : ""
+      }`,
+    ]);
+  }
+
+  rows.push(["Amount payable", money(pricing.total, currency)]);
+  rows.push(["Customer", row.customer_email || row.customer_name || "Not specified"]);
+  rows.push(["Created by", row.created_by || "Not specified"]);
+
   if (row.purpose) rows.push(["Purpose", row.purpose]);
+  if (row.internal_note) rows.push(["Internal note", row.internal_note]);
+  if (row.link_expires_at) {
+    rows.push(["Link expires", new Date(row.link_expires_at).toLocaleString("en-IN")]);
+  }
+  if (row.max_redemptions) rows.push(["Max redemptions", String(row.max_redemptions)]);
 
   const tableRows = rows
     .map(
@@ -569,6 +740,33 @@ async function sendApprovalEmail(row: PaymentLinkRow, baseUrl: string) {
   });
 }
 
+/**
+ * Whether a payment link can carry a preset discount depends on the account's
+ * Stripe API version: `discounts` exists on older versions and is gone in
+ * 2026-02-25.clover. Rather than guess, try with the discount and fall back to
+ * letting the customer enter the code, reporting which path was taken.
+ */
+async function createPaymentLinkWithDiscountFallback(
+  stripe: Awaited<ReturnType<typeof stripeClient>>,
+  params: Stripe.PaymentLinkCreateParams & { discounts?: unknown },
+) {
+  try {
+    const paymentLink = await stripe.paymentLinks.create(params);
+    return { paymentLink, discountApplied: Boolean(params.discounts) };
+  } catch (error) {
+    const unknownParam =
+      error && typeof error === "object" && "param" in error && error.param === "discounts";
+    if (!params.discounts || !unknownParam) throw error;
+
+    const { discounts: _discounts, ...rest } = params;
+    const paymentLink = await stripe.paymentLinks.create({
+      ...rest,
+      allow_promotion_codes: true,
+    });
+    return { paymentLink, discountApplied: false };
+  }
+}
+
 export async function createApprovedStripePaymentLink(row: PaymentLinkRow) {
   const stripe = await stripeClient();
   const baseUrl = getBaseUrl();
@@ -592,7 +790,8 @@ export async function createApprovedStripePaymentLink(row: PaymentLinkRow) {
       metadata: { payment_link_request_id: row.id },
     });
     const promo = await stripe.promotionCodes.create({
-      coupon: coupon.id,
+      // 2026-02-25.clover takes the coupon nested under `promotion`.
+      promotion: { type: "coupon", coupon: coupon.id },
       code: row.promotion_code,
       metadata: { payment_link_request_id: row.id },
     });
@@ -615,22 +814,42 @@ export async function createApprovedStripePaymentLink(row: PaymentLinkRow) {
   const utm =
     row.utm_parameters && typeof row.utm_parameters === "object" ? row.utm_parameters : {};
 
-  const paymentLink = await stripe.paymentLinks.create({
+  const createParams: Stripe.PaymentLinkCreateParams & { discounts?: unknown } = {
     line_items: lineItems.map((item) => ({
-      price: item.priceId || row.stripe_price_id,
+      price: item.priceId || row.stripe_price_id || "",
       quantity: item.quantity || 1,
+      adjustable_quantity: row.adjustable_quantity ? { enabled: true, minimum: 1 } : undefined,
     })),
-    discounts: promotionCodeId ? [{ promotion_code: promotionCodeId }] : undefined,
+    billing_address_collection: row.collect_address ? "required" : "auto",
+    phone_number_collection: row.collect_phone ? { enabled: true } : undefined,
+    restrictions: row.max_redemptions
+      ? { completed_sessions: { limit: row.max_redemptions } }
+      : row.single_use
+        ? { completed_sessions: { limit: 1 } }
+        : undefined,
+    inactive_message: row.link_expires_at
+      ? "This payment link has expired. Please contact the studio for a new link."
+      : undefined,
     custom_fields: customFields.map((field) => ({
       key: field.key ?? "custom_field",
       label: { type: "custom", custom: field.label ?? "Custom field" },
       type: field.type ?? "text",
       optional: field.optional ?? true,
     })),
-    after_completion: {
-      type: "redirect",
-      redirect: { url: `${baseUrl}/payment-links?payment=success` },
-    },
+    after_completion:
+      row.after_completion_type === "message"
+        ? {
+            type: "hosted_confirmation",
+            hosted_confirmation: {
+              custom_message: row.after_completion_message ?? "Thank you for your payment.",
+            },
+          }
+        : {
+            type: "redirect",
+            redirect: {
+              url: row.after_completion_redirect_url || `${baseUrl}/payment-links?payment=success`,
+            },
+          },
     metadata: {
       payment_link_request_id: row.id,
       customer_email: row.customer_email ?? "",
@@ -641,14 +860,26 @@ export async function createApprovedStripePaymentLink(row: PaymentLinkRow) {
       utm_medium: String((utm as Record<string, unknown>).medium ?? ""),
       utm_campaign: String((utm as Record<string, unknown>).campaign ?? ""),
     },
-  });
+  };
+
+  // A preset discount and a customer-entered code are mutually exclusive.
+  if (promotionCodeId) {
+    createParams.discounts = [{ promotion_code: promotionCodeId }];
+  } else if (row.allow_promotion_codes) {
+    createParams.allow_promotion_codes = true;
+  }
+
+  const { paymentLink, discountApplied } = await createPaymentLinkWithDiscountFallback(
+    stripe,
+    createParams,
+  );
   const url = new URL(paymentLink.url);
   for (const [key, value] of Object.entries(utm as Record<string, unknown>)) {
     if (value) url.searchParams.set(`utm_${key}`, String(value));
   }
 
   const { data: updated, error } = await supabaseAdmin
-    .from("stripe_payment_links")
+    .from("payment_link_requests")
     .update({
       status: "created",
       approved_at: new Date().toISOString(),
@@ -658,7 +889,11 @@ export async function createApprovedStripePaymentLink(row: PaymentLinkRow) {
       custom_coupon_id: couponId,
       custom_promotion_code_id: customPromotionCodeId,
       stripe_response: toJson(paymentLink),
-      error_message: null,
+      allow_promotion_codes: paymentLink.allow_promotion_codes ?? row.allow_promotion_codes,
+      error_message:
+        promotionCodeId && !discountApplied
+          ? "This Stripe API version cannot preset a discount on a payment link. The link was created with a promo code box instead — the customer must enter the code."
+          : null,
     })
     .eq("id", row.id)
     .select()
@@ -670,7 +905,7 @@ export async function createApprovedStripePaymentLink(row: PaymentLinkRow) {
 
 export const listStripePaymentLinks = createServerFn({ method: "GET" }).handler(async () => {
   const { data, error } = await supabaseAdmin
-    .from("stripe_payment_links")
+    .from("payment_link_requests")
     .select("*")
     .order("created_at", { ascending: false })
     .limit(200);
@@ -679,15 +914,89 @@ export const listStripePaymentLinks = createServerFn({ method: "GET" }).handler(
 
   const links = (data ?? []) as PaymentLinkRow[];
   return {
-    links,
+    links: links.map((link) => {
+      const pricing = rowPricing(link);
+      const promotion = describePromotion(rowPromotion(link));
+      return {
+        ...link,
+        pricing,
+        promotionCode: promotion.code,
+        promotionLabel: promotion.label,
+        promotionDiscountLabel: promotion.discountLabel,
+        isExpired: Boolean(
+          link.link_expires_at && new Date(link.link_expires_at).getTime() < Date.now(),
+        ),
+      };
+    }),
     analytics: {
       totalLinks: links.length,
       paidLinks: links.filter((link) => link.status === "paid").length,
-      totalRevenue: links.reduce((sum, link) => sum + link.total_paid_amount, 0),
-      totalPayments: links.reduce((sum, link) => sum + link.payment_count, 0),
+      totalRevenue: links.reduce((sum, link) => sum + (link.total_paid_amount ?? 0), 0),
+      totalPayments: links.reduce((sum, link) => sum + (link.payment_count ?? 0), 0),
     },
   };
 });
+
+/**
+ * Pulls one link's current state from Stripe and writes it back. Webhooks are
+ * the primary path; this exists for when one is missed, and it also retires
+ * links that have passed their expiry date (Stripe has no native expiry).
+ */
+export const syncStripePaymentLink = createServerFn({ method: "POST" })
+  .inputValidator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
+  .handler(async ({ data }) => {
+    const stripe = await stripeClient();
+    const { data: row, error } = await supabaseAdmin
+      .from("payment_link_requests")
+      .select("*")
+      .eq("id", data.id)
+      .maybeSingle();
+
+    if (error) throw new Error(error.message);
+    const link = row as PaymentLinkRow | null;
+    if (!link?.stripe_payment_link_id) throw new Error("This request has no Stripe link yet");
+
+    const expired = Boolean(
+      link.link_expires_at && new Date(link.link_expires_at).getTime() < Date.now(),
+    );
+
+    const paymentLink =
+      expired && link.status !== "inactive"
+        ? await stripe.paymentLinks.update(link.stripe_payment_link_id, { active: false })
+        : await stripe.paymentLinks.retrieve(link.stripe_payment_link_id);
+
+    const sessions = await stripe.checkout.sessions.list({
+      payment_link: link.stripe_payment_link_id,
+      limit: 100,
+    });
+    const paidSessions = sessions.data.filter((session) => session.payment_status === "paid");
+    const totalPaid = paidSessions.reduce((sum, session) => sum + (session.amount_total ?? 0), 0);
+    const lastPaidAt = paidSessions
+      .map((session) => session.created)
+      .sort((a, b) => b - a)
+      .at(0);
+
+    const status: PaymentLinkRow["status"] = paidSessions.length
+      ? "paid"
+      : paymentLink.active
+        ? "created"
+        : "inactive";
+
+    const { error: updateError } = await supabaseAdmin
+      .from("payment_link_requests")
+      .update({
+        status,
+        payment_count: paidSessions.length,
+        total_paid_amount: totalPaid,
+        last_payment_at: lastPaidAt ? new Date(lastPaidAt * 1000).toISOString() : null,
+        checkout_session_ids: paidSessions.map((session) => session.id),
+        stripe_response: toJson(paymentLink),
+      })
+      .eq("id", link.id);
+
+    if (updateError) throw new Error(updateError.message);
+    return { ok: true, status, paymentCount: paidSessions.length, expired };
+  });
 
 export const setStripePaymentLinkActive = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) =>
@@ -696,7 +1005,7 @@ export const setStripePaymentLinkActive = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const stripe = await stripeClient();
     const { data: row, error } = await supabaseAdmin
-      .from("stripe_payment_links")
+      .from("payment_link_requests")
       .select("*")
       .eq("id", data.id)
       .maybeSingle();
@@ -709,7 +1018,7 @@ export const setStripePaymentLinkActive = createServerFn({ method: "POST" })
     });
 
     const { error: updateError } = await supabaseAdmin
-      .from("stripe_payment_links")
+      .from("payment_link_requests")
       .update({
         status: data.active ? "created" : "inactive",
         stripe_response: toJson(paymentLink),

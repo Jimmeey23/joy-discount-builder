@@ -2,7 +2,13 @@ import { createFileRoute } from "@tanstack/react-router";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import type { Tables } from "@/integrations/supabase/types";
 
-const MOMENCE_HOST_ID = 13752;
+import {
+  candidateArrays,
+  createMomenceDiscountCode,
+  fetchMomenceDiscountCodes,
+  MOMENCE_HOST_ID,
+  MomenceSessionError,
+} from "@/lib/momence.server";
 const STATUS_NOTIFICATION_EMAIL = "info@physique57india.com";
 
 type DiscountRequestRow = Tables<"discount_requests">;
@@ -178,76 +184,6 @@ async function notifyStatus(row: DiscountRequestRow, status: "approved" | "rejec
   });
 }
 
-async function callMomence(payload: MomencePayload) {
-  const cookie = process.env.MOMENCE_COOKIE;
-  if (!cookie) throw new Error("MOMENCE_COOKIE not configured");
-  const res = await fetch(
-    `https://momence.com/_api/primary/host/${MOMENCE_HOST_ID}/discount-codes`,
-    {
-      method: "POST",
-      headers: {
-        accept: "application/json, text/plain, */*",
-        "content-type": "application/json",
-        cookie,
-        origin: "https://momence.com",
-        referer: `https://momence.com/dashboard/${MOMENCE_HOST_ID}/discount-codes/create`,
-        "user-agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
-        "x-idempotence-key": crypto.randomUUID(),
-        "x-origin": `https://momence.com/dashboard/${MOMENCE_HOST_ID}/discount-codes/create`,
-      },
-      body: JSON.stringify(payload),
-    },
-  );
-  const text = await res.text();
-  let json: unknown = null;
-  try {
-    json = text ? JSON.parse(text) : null;
-  } catch {
-    json = { raw: text };
-  }
-  return { ok: res.ok, status: res.status, body: json };
-}
-
-async function fetchMomenceDiscountCodes() {
-  const cookie = process.env.MOMENCE_COOKIE;
-  if (!cookie) throw new Error("MOMENCE_COOKIE not configured");
-  const res = await fetch(
-    `https://momence.com/_api/primary/host/${MOMENCE_HOST_ID}/discount-codes?includeExpired=false`,
-    {
-      headers: {
-        accept: "application/json, text/plain, */*",
-        cookie,
-        referer: `https://momence.com/dashboard/${MOMENCE_HOST_ID}/discount-codes`,
-        "user-agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
-        "x-origin": `https://momence.com/dashboard/${MOMENCE_HOST_ID}/discount-codes`,
-      },
-    },
-  );
-  const text = await res.text();
-  let json: unknown = null;
-  try {
-    json = text ? JSON.parse(text) : null;
-  } catch {
-    json = { raw: text };
-  }
-  if (!res.ok) {
-    throw new Error(`Momence discount list failed [${res.status}]: ${JSON.stringify(json)}`);
-  }
-  return json;
-}
-
-function candidateArrays(value: unknown): unknown[] {
-  if (Array.isArray(value)) return value;
-  if (!value || typeof value !== "object") return [];
-  const obj = value as Record<string, unknown>;
-  for (const key of ["data", "discountCodes", "discount_codes", "items", "results"]) {
-    if (Array.isArray(obj[key])) return obj[key];
-  }
-  return [];
-}
-
 function numericField(obj: Record<string, unknown>, keys: string[]) {
   for (const key of keys) {
     const value = obj[key];
@@ -421,7 +357,10 @@ export const Route = createFileRoute("/api/public/discount/decision")({
           );
         }
 
-        if (row.status !== "pending") {
+        // "failed" means Momence rejected the call, not that a decision was
+        // made — the approval link stays usable so it can be retried once the
+        // underlying problem is fixed.
+        if (row.status !== "pending" && row.status !== "failed") {
           return html(
             page({
               title: `Already ${row.status}`,
@@ -490,9 +429,12 @@ export const Route = createFileRoute("/api/public/discount/decision")({
           }
 
           const payload = buildMomencePayload(row);
-          const result = await callMomence(payload);
+          const result = await createMomenceDiscountCode(payload);
 
           if (!result.ok) {
+            if (result.status === 401 || result.status === 403) {
+              throw new MomenceSessionError(result.status);
+            }
             await supabaseAdmin
               .from("discount_requests")
               .update({
@@ -534,21 +476,28 @@ export const Route = createFileRoute("/api/public/discount/decision")({
             }),
           );
         } catch (e: unknown) {
+          const sessionExpired = e instanceof MomenceSessionError;
+
           await supabaseAdmin
             .from("discount_requests")
             .update({
-              status: "failed",
+              // A dead Momence session says nothing about this request, so keep
+              // it pending — re-approving works once the cookie is replaced.
+              status: sessionExpired ? "pending" : "failed",
               error_message: errorMessage(e),
             })
             .eq("id", row.id);
+
           return html(
             page({
-              title: "Failed to create code",
-              message: "The Momence API call failed.",
+              title: sessionExpired ? "Momence session expired" : "Failed to create code",
+              message: sessionExpired
+                ? `No code was created and "${row.code}" is still pending. Momence sign-in failed — check MOMENCE_USERNAME, MOMENCE_PASSWORD and MOMENCE_TOTP_SECRET, then open this approval link again.`
+                : "The Momence API call failed.",
               detail: errorMessage(e),
               status: "error",
             }),
-            500,
+            sessionExpired ? 503 : 500,
           );
         }
       },
