@@ -730,6 +730,110 @@ function buildApprovalEmail(row: PaymentLinkRow, baseUrl: string) {
   return { html, text };
 }
 
+function detailRows(rows: Array<[string, string]>) {
+  return rows
+    .map(
+      ([k, v]) =>
+        `<tr><td style="padding:8px 12px;color:#64748b;font-size:13px;border-bottom:1px solid #f1f5f9;vertical-align:top;width:140px;">${escapeHtml(k)}</td><td style="padding:8px 12px;color:#0f172a;font-size:14px;border-bottom:1px solid #f1f5f9;word-break:break-all;">${escapeHtml(v)}</td></tr>`,
+    )
+    .join("");
+}
+
+/**
+ * Sent once the link exists in Stripe, so whoever approved it has the URL in
+ * hand without going back to the dashboard — and can see at a glance whether
+ * the promo code is preset, prefilled in the URL, or left for the customer.
+ */
+function buildCreatedEmail(row: PaymentLinkRow, promoState: PromoState) {
+  const pricing = rowPricing(row);
+  const promotion = describePromotion(rowPromotion(row));
+  const currency = row.currency ?? "inr";
+  const url = row.stripe_payment_link_url ?? "";
+
+  const rows: Array<[string, string]> = [
+    ["Product", row.product_name ?? "Stripe product"],
+    ["Quantity", String(row.quantity ?? 1)],
+    ["Subtotal", money(pricing.subtotal, currency)],
+  ];
+
+  if (promotion.code) {
+    rows.push(["Promo code", promotion.discountLabel ? promotion.label : promotion.code]);
+  }
+  if (pricing.discountAmount > 0) {
+    rows.push([
+      "Discount",
+      `− ${money(pricing.discountAmount, currency)}${
+        pricing.discountLabel ? ` (${pricing.discountLabel})` : ""
+      }`,
+    ]);
+  }
+
+  rows.push(["Amount payable", money(pricing.total, currency)]);
+  rows.push(["Customer", row.customer_email || row.customer_name || "Not specified"]);
+  rows.push(["Created by", row.created_by || "Not specified"]);
+  if (row.purpose) rows.push(["Purpose", row.purpose]);
+  if (row.link_expires_at) {
+    rows.push(["Link expires", new Date(row.link_expires_at).toLocaleString("en-IN")]);
+  }
+  if (row.max_redemptions) rows.push(["Max redemptions", String(row.max_redemptions)]);
+  rows.push(["Stripe link ID", row.stripe_payment_link_id ?? "—"]);
+
+  const promoNote =
+    promoState.kind === "preset"
+      ? `The discount is applied to the link itself — the customer sees the reduced price straight away.`
+      : promoState.kind === "prefilled"
+        ? `Stripe could not preset the discount on this link, so the code <strong>${escapeHtml(promoState.code)}</strong> is prefilled in the URL instead. It applies automatically as long as the link is sent exactly as shown above.`
+        : promoState.kind === "manual"
+          ? `The discount could not be preset or prefilled. The customer must type the code at checkout.`
+          : "";
+
+  const html = `<!doctype html><html><body style="margin:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <div style="max-width:620px;margin:0 auto;padding:32px 16px;">
+    <div style="background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e2e8f0;">
+      <div style="background:linear-gradient(135deg,#065f46,#10b981);padding:28px 32px;">
+        <div style="color:rgba(255,255,255,0.85);font-size:12px;letter-spacing:0.08em;text-transform:uppercase;font-weight:600;">Stripe · Payment link created</div>
+        <h1 style="color:#fff;margin:8px 0 0;font-size:22px;font-weight:700;">${escapeHtml(row.product_name ?? "Stripe product")}</h1>
+      </div>
+      <div style="padding:24px 32px;">
+        <p style="margin:0 0 18px;color:#334155;font-size:14px;line-height:1.6;">The payment link is live in Stripe and ready to send.</p>
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:14px;font-size:13px;color:#0f172a;word-break:break-all;margin-bottom:18px;">${escapeHtml(url)}</div>
+        <div style="margin:0 0 22px;">
+          <a href="${escapeHtml(url)}" style="display:inline-block;background:#0f172a;color:#fff;text-decoration:none;padding:12px 22px;border-radius:10px;font-weight:600;font-size:14px;">Open payment link</a>
+        </div>
+        <table style="width:100%;border-collapse:collapse;border:1px solid #f1f5f9;">${detailRows(rows)}</table>
+        ${
+          promoNote
+            ? `<p style="margin:18px 0 0;color:#475569;font-size:13px;line-height:1.6;">${promoNote}</p>`
+            : ""
+        }
+      </div>
+    </div>
+  </div></body></html>`;
+
+  const text = `Stripe payment link created\n\n${url}\n\n${rows.map(([k, v]) => `${k}: ${v}`).join("\n")}`;
+  return { html, text };
+}
+
+/** The approver, plus whoever raised the request when that is an address. */
+function createdEmailRecipients(row: PaymentLinkRow) {
+  const recipients = new Set([APPROVAL_EMAIL]);
+  const creator = row.created_by?.trim();
+  if (creator && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(creator)) recipients.add(creator);
+  return [...recipients];
+}
+
+async function sendCreatedEmail(row: PaymentLinkRow, promoState: PromoState) {
+  const email = buildCreatedEmail(row, promoState);
+  for (const to of createdEmailRecipients(row)) {
+    await sendMailtrap({
+      to,
+      subject: `[Created] Stripe payment link — ${row.product_name ?? "Stripe product"}`,
+      html: email.html,
+      text: email.text,
+    });
+  }
+}
+
 async function sendApprovalEmail(row: PaymentLinkRow, baseUrl: string) {
   const email = buildApprovalEmail(row, baseUrl);
   await sendMailtrap({
@@ -746,6 +850,12 @@ async function sendApprovalEmail(row: PaymentLinkRow, baseUrl: string) {
  * 2026-02-25.clover. Rather than guess, try with the discount and fall back to
  * letting the customer enter the code, reporting which path was taken.
  */
+type PromoState =
+  | { kind: "none" }
+  | { kind: "preset" }
+  | { kind: "prefilled"; code: string }
+  | { kind: "manual" };
+
 async function createPaymentLinkWithDiscountFallback(
   stripe: Awaited<ReturnType<typeof stripeClient>>,
   params: Stripe.PaymentLinkCreateParams & { discounts?: unknown },
@@ -918,7 +1028,24 @@ export async function createApprovedStripePaymentLink(row: PaymentLinkRow) {
     .single();
 
   if (error || !updated) throw new Error(`Failed to save approved Stripe link: ${error?.message}`);
-  return updated as PaymentLinkRow;
+  const saved = updated as PaymentLinkRow;
+
+  const promoState: PromoState = !promotionCodeId
+    ? { kind: "none" }
+    : discountApplied
+      ? { kind: "preset" }
+      : prefilledPromoCode
+        ? { kind: "prefilled", code: prefilledPromoCode }
+        : { kind: "manual" };
+
+  // The link exists either way; a failed notification must not undo that.
+  try {
+    await sendCreatedEmail(saved, promoState);
+  } catch (e) {
+    console.error("Payment link created email failed", e);
+  }
+
+  return saved;
 }
 
 export const listStripePaymentLinks = createServerFn({ method: "GET" }).handler(async () => {
