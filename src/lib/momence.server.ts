@@ -72,8 +72,7 @@ function base32Decode(input: string): Uint8Array {
  * RFC 6238 TOTP over Web Crypto, so this works on Workers as well as Node
  * without pulling in an authenticator library.
  */
-async function generateTotp(secret: string, stepSeconds = 30, digits = 6) {
-  const counter = Math.floor(Date.now() / 1000 / stepSeconds);
+async function generateTotp(secret: string, counter: number, digits = 6) {
   const counterBuffer = new ArrayBuffer(8);
   const view = new DataView(counterBuffer);
   view.setUint32(0, Math.floor(counter / 2 ** 32));
@@ -96,6 +95,30 @@ async function generateTotp(secret: string, stepSeconds = 30, digits = 6) {
     signature[offset + 3];
 
   return String(binary % 10 ** digits).padStart(digits, "0");
+}
+
+export const TOTP_STEP_SECONDS = 30;
+
+function totpCounter(at = Date.now()) {
+  return Math.floor(at / 1000 / TOTP_STEP_SECONDS);
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * A TOTP token is single-use: presenting the same one twice inside its 30s
+ * window is a failed MFA attempt, which counts toward Momence's rate limit.
+ * Wait out the rest of the window rather than spending an attempt on a token
+ * the previous sign-in already burned.
+ */
+async function nextUnusedTotpCounter(lastUsed: number | null) {
+  let counter = totpCounter();
+  if (lastUsed !== null && counter <= lastUsed) {
+    const target = (lastUsed + 1) * TOTP_STEP_SECONDS * 1000;
+    await sleep(Math.max(0, target - Date.now()) + 500);
+    counter = totpCounter();
+  }
+  return counter;
 }
 
 // ---------------------------------------------------------------- sign-in
@@ -122,9 +145,11 @@ function mergeCookies(...groups: string[][]) {
 }
 
 export class MomenceRateLimitError extends Error {
-  constructor() {
+  constructor(public retryAfterMs: number | null = null) {
     super(
-      "Momence is rate-limiting sign-in attempts. Wait for the limit to clear, then try again — no MFA code was accepted.",
+      retryAfterMs && retryAfterMs > 0
+        ? `Momence is rate-limiting sign-in attempts. Try again in about ${Math.ceil(retryAfterMs / 60000)} minute(s) — no MFA code was accepted.`
+        : "Momence is rate-limiting sign-in attempts. Wait for the limit to clear, then try again — no MFA code was accepted.",
     );
     this.name = "MomenceRateLimitError";
   }
@@ -140,26 +165,63 @@ function deviceCookieFrom(cookie: string) {
   );
 }
 
+type SessionRow = {
+  cookie: string | null;
+  device_cookie: string | null;
+  signed_in_at: string;
+  rate_limited_until: string | null;
+  rate_limit_hits: number | null;
+  last_signin_attempt_at: string | null;
+  last_totp_counter: number | null;
+};
+
 async function loadStoredSession() {
   const { data, error } = await supabaseAdmin
     .from("momence_session")
-    .select("cookie,device_cookie,signed_in_at")
+    .select(
+      "cookie,device_cookie,signed_in_at,rate_limited_until,rate_limit_hits,last_signin_attempt_at,last_totp_counter",
+    )
     .eq("id", "default")
     .maybeSingle();
   if (error) return null;
-  return data as { cookie: string; device_cookie: string | null; signed_in_at: string } | null;
+  return data as SessionRow | null;
+}
+
+async function patchSession(patch: Record<string, unknown>) {
+  await supabaseAdmin.from("momence_session").upsert({ id: "default", ...patch });
 }
 
 async function storeSession(cookie: string, deviceCookie: string | null) {
-  await supabaseAdmin.from("momence_session").upsert({
-    id: "default",
+  await patchSession({
     cookie,
     device_cookie: deviceCookie,
     signed_in_at: new Date().toISOString(),
+    rate_limited_until: null,
+    rate_limit_hits: 0,
   });
 }
 
-async function signIn(): Promise<string> {
+/**
+ * Two sign-ins closer together than this are almost always two instances
+ * reacting to the same expired cookie, not a genuinely dead session.
+ */
+const MIN_SIGNIN_INTERVAL_MS = 90 * 1000;
+
+/** Doubling backoff, so a limit that keeps tripping is not hammered further. */
+const RATE_LIMIT_BASE_MS = 5 * 60 * 1000;
+const RATE_LIMIT_MAX_MS = 60 * 60 * 1000;
+
+async function recordRateLimit(stored: SessionRow | null) {
+  const hits = (stored?.rate_limit_hits ?? 0) + 1;
+  const waitMs = Math.min(RATE_LIMIT_BASE_MS * 2 ** (hits - 1), RATE_LIMIT_MAX_MS);
+  await patchSession({
+    rate_limit_hits: hits,
+    rate_limited_until: new Date(Date.now() + waitMs).toISOString(),
+  });
+  return new MomenceRateLimitError(waitMs);
+}
+
+async function signIn(staleCookie: string | null = null): Promise<string> {
   const email = process.env.MOMENCE_USERNAME;
   const password = process.env.MOMENCE_PASSWORD;
   const totpSecret = process.env.MOMENCE_TOTP_SECRET;
@@ -172,6 +234,29 @@ async function signIn(): Promise<string> {
   const stored = await loadStoredSession();
   const deviceCookie = stored?.device_cookie ?? null;
 
+  // Another instance may already have signed in while this one was failing on
+  // the old cookie. Taking its session costs nothing; a second login does.
+  if (stored?.cookie && stored.cookie !== staleCookie) return stored.cookie;
+
+  const limitedUntil = stored?.rate_limited_until
+    ? Date.parse(stored.rate_limited_until)
+    : null;
+  if (limitedUntil && limitedUntil > Date.now()) {
+    throw new MomenceRateLimitError(limitedUntil - Date.now());
+  }
+
+  // Throttle sign-in attempts across instances: bursts of cold starts are what
+  // trip the limit in the first place.
+  const lastAttempt = stored?.last_signin_attempt_at
+    ? Date.parse(stored.last_signin_attempt_at)
+    : null;
+  if (lastAttempt && Date.now() - lastAttempt < MIN_SIGNIN_INTERVAL_MS) {
+    if (stored?.cookie) return stored.cookie;
+    throw new MomenceRateLimitError(MIN_SIGNIN_INTERVAL_MS - (Date.now() - lastAttempt));
+  }
+
+  await patchSession({ last_signin_attempt_at: new Date().toISOString() });
+
   const login = await fetch(LOGIN_URL, {
     method: "POST",
     headers: {
@@ -182,7 +267,7 @@ async function signIn(): Promise<string> {
     body: JSON.stringify({ email, password, deviceData: DEVICE_DATA }),
   });
 
-  if (login.status === 429) throw new MomenceRateLimitError();
+  if (login.status === 429) throw await recordRateLimit(stored);
   if (!login.ok) throw new MomenceSessionError(login.status);
 
   const loginCookies = readSetCookies(login);
@@ -206,6 +291,9 @@ async function signIn(): Promise<string> {
 
   // Momence rate-limits this endpoint hard, so spend exactly one code per
   // sign-in. A wrong code means the secret is wrong, which retrying cannot fix.
+  const counter = await nextUnusedTotpCounter(stored?.last_totp_counter ?? null);
+  await patchSession({ last_totp_counter: counter });
+
   const mfa = await fetch(MFA_URL, {
     method: "POST",
     headers: {
@@ -214,13 +302,13 @@ async function signIn(): Promise<string> {
       cookie: mergeCookies(deviceCookie ? [deviceCookie] : [], loginCookies),
     },
     body: JSON.stringify({
-      token: await generateTotp(totpSecret),
+      token: await generateTotp(totpSecret, counter),
       deviceData: DEVICE_DATA,
       trustDevice: true,
     }),
   });
 
-  if (mfa.status === 429) throw new MomenceRateLimitError();
+  if (mfa.status === 429) throw await recordRateLimit(stored);
   if (!mfa.ok) throw new MomenceSessionError(mfa.status);
 
   const cookie = mergeCookies(
@@ -235,17 +323,18 @@ async function signIn(): Promise<string> {
 /** Serialises sign-ins so concurrent callers spend one MFA code between them. */
 let signInInFlight: Promise<string> | null = null;
 
-async function signInOnce() {
+async function signInOnce(staleCookie: string | null) {
   if (!signInInFlight) {
-    signInInFlight = signIn().finally(() => {
+    signInInFlight = signIn(staleCookie).finally(() => {
       signInInFlight = null;
     });
   }
   return signInInFlight;
 }
 
-async function getCookie(forceRefresh = false) {
+async function getCookie(staleCookie: string | null = null) {
   const override = process.env.MOMENCE_COOKIE;
+  const forceRefresh = staleCookie !== null;
   if (override && !forceRefresh) return override;
 
   if (!forceRefresh) {
@@ -259,9 +348,12 @@ async function getCookie(forceRefresh = false) {
       cookieCache = { cookie: stored.cookie, mintedAt: Date.parse(stored.signed_in_at) };
       return stored.cookie;
     }
+  } else {
+    // The rejected cookie is no longer worth serving from memory.
+    if (cookieCache?.cookie === staleCookie) cookieCache = null;
   }
 
-  const cookie = await signInOnce();
+  const cookie = await signInOnce(staleCookie);
   cookieCache = { cookie, mintedAt: Date.now() };
   return cookie;
 }
@@ -292,9 +384,10 @@ async function momenceFetch(
   const send = async (cookie: string) =>
     fetch(url, { ...rest, headers: dashboardHeaders(cookie, dashboardPath, extraHeaders) });
 
-  let response = await send(await getCookie());
+  const cookie = await getCookie();
+  let response = await send(cookie);
   if (response.status === 401 || response.status === 403) {
-    response = await send(await getCookie(true));
+    response = await send(await getCookie(cookie));
   }
   return response;
 }

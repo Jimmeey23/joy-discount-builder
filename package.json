@@ -12,7 +12,8 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "backfill:promo-urls": "tsx scripts/backfill-prefilled-promo-codes.ts"
   },
   "dependencies": {
     "@cloudflare/vite-plugin": "^1.25.5",

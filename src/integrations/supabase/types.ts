@@ -97,23 +97,35 @@ export type Database = {
       };
       momence_session: {
         Row: {
-          cookie: string;
+          cookie: string | null;
           device_cookie: string | null;
           id: string;
+          last_signin_attempt_at: string | null;
+          last_totp_counter: number | null;
+          rate_limit_hits: number;
+          rate_limited_until: string | null;
           signed_in_at: string;
           updated_at: string;
         };
         Insert: {
-          cookie: string;
+          cookie?: string | null;
           device_cookie?: string | null;
           id?: string;
+          last_signin_attempt_at?: string | null;
+          last_totp_counter?: number | null;
+          rate_limit_hits?: number;
+          rate_limited_until?: string | null;
           signed_in_at?: string;
           updated_at?: string;
         };
         Update: {
-          cookie?: string;
+          cookie?: string | null;
           device_cookie?: string | null;
           id?: string;
+          last_signin_attempt_at?: string | null;
+          last_totp_counter?: number | null;
+          rate_limit_hits?: number;
+          rate_limited_until?: string | null;
           signed_in_at?: string;
           updated_at?: string;
         };
