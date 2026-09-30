@@ -814,17 +814,21 @@ function buildCreatedEmail(row: PaymentLinkRow, promoState: PromoState) {
   return { html, text };
 }
 
-/** The approver, plus whoever raised the request when that is an address. */
-function createdEmailRecipients(row: PaymentLinkRow) {
+/**
+ * The approver, plus the mailbox the approval request was sent from, so the
+ * decision lands back in the same thread. `created_by` holds an associate's
+ * name, not an address, so there is no per-requester inbox to reach.
+ */
+function createdEmailRecipients() {
   const recipients = new Set([APPROVAL_EMAIL]);
-  const creator = row.created_by?.trim();
-  if (creator && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(creator)) recipients.add(creator);
+  const sender = process.env.MAILTRAP_SENDER_EMAIL?.trim();
+  if (sender) recipients.add(sender);
   return [...recipients];
 }
 
 async function sendCreatedEmail(row: PaymentLinkRow, promoState: PromoState) {
   const email = buildCreatedEmail(row, promoState);
-  for (const to of createdEmailRecipients(row)) {
+  for (const to of createdEmailRecipients()) {
     await sendMailtrap({
       to,
       subject: `[Created] Stripe payment link — ${row.product_name ?? "Stripe product"}`,

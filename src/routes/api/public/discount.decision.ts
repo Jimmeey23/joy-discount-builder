@@ -183,14 +183,28 @@ ${rows.map(([k, v]) => `${k}: ${v}`).join("\n")}`;
   };
 }
 
+/**
+ * The status mailbox, plus the address the approval request was sent from, so
+ * the decision replies into the same thread. `requested_by` is a free-text
+ * name rather than an address, so it cannot be mailed directly.
+ */
+function statusRecipients() {
+  const recipients = new Set([STATUS_NOTIFICATION_EMAIL]);
+  const sender = process.env.MAILTRAP_SENDER_EMAIL?.trim();
+  if (sender) recipients.add(sender);
+  return [...recipients];
+}
+
 async function notifyStatus(row: DiscountRequestRow, status: "approved" | "rejected") {
   const message = buildStatusEmail(row, status);
-  await sendMailtrap({
-    to: STATUS_NOTIFICATION_EMAIL,
-    subject: message.subject,
-    html: message.html,
-    text: message.text,
-  });
+  for (const to of statusRecipients()) {
+    await sendMailtrap({
+      to,
+      subject: message.subject,
+      html: message.html,
+      text: message.text,
+    });
+  }
 }
 
 function numericField(obj: Record<string, unknown>, keys: string[]) {
