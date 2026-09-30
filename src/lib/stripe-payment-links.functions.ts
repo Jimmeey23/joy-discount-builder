@@ -878,6 +878,24 @@ export async function createApprovedStripePaymentLink(row: PaymentLinkRow) {
     if (value) url.searchParams.set(`utm_${key}`, String(value));
   }
 
+  // When the discount could not be preset, Stripe still accepts the code
+  // prefilled in the URL, so the customer never has to type it.
+  let prefilledPromoCode: string | null = null;
+  if (promotionCodeId && !discountApplied) {
+    prefilledPromoCode = row.promotion_code ?? null;
+    if (!prefilledPromoCode) {
+      try {
+        const promo = await stripe.promotionCodes.retrieve(promotionCodeId);
+        prefilledPromoCode = promo.code ?? null;
+      } catch {
+        prefilledPromoCode = null;
+      }
+    }
+    if (prefilledPromoCode) {
+      url.searchParams.set("prefilled_promo_code", prefilledPromoCode);
+    }
+  }
+
   const { data: updated, error } = await supabaseAdmin
     .from("payment_link_requests")
     .update({
@@ -891,8 +909,8 @@ export async function createApprovedStripePaymentLink(row: PaymentLinkRow) {
       stripe_response: toJson(paymentLink),
       allow_promotion_codes: paymentLink.allow_promotion_codes ?? row.allow_promotion_codes,
       error_message:
-        promotionCodeId && !discountApplied
-          ? "This Stripe API version cannot preset a discount on a payment link. The link was created with a promo code box instead — the customer must enter the code."
+        promotionCodeId && !discountApplied && !prefilledPromoCode
+          ? "This Stripe API version cannot preset a discount on a payment link, and the promo code could not be read back to prefill it. The customer must enter the code."
           : null,
     })
     .eq("id", row.id)
