@@ -236,7 +236,12 @@ async function signIn(staleCookie: string | null = null): Promise<string> {
 
   // Another instance may already have signed in while this one was failing on
   // the old cookie. Taking its session costs nothing; a second login does.
-  if (stored?.cookie && stored.cookie !== staleCookie) return stored.cookie;
+  // Only a recent one, though: an old stored cookie that differs from the
+  // rejected one (e.g. a stale MOMENCE_COOKIE override) is just as dead.
+  const storedAge = stored?.signed_in_at ? Date.now() - Date.parse(stored.signed_in_at) : Infinity;
+  if (stored?.cookie && stored.cookie !== staleCookie && storedAge < MIN_SIGNIN_INTERVAL_MS) {
+    return stored.cookie;
+  }
 
   const limitedUntil = stored?.rate_limited_until
     ? Date.parse(stored.rate_limited_until)
