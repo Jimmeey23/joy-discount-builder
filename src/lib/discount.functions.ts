@@ -299,20 +299,8 @@ export const submitDiscountRequest = createServerFn({ method: "POST" })
       throw new Error(`Failed to save request: ${error?.message ?? "unknown error"}`);
     }
 
-    const { html, text } = buildApprovalEmail({
-      baseUrl,
-      approveToken: row.approve_token,
-      rejectToken: row.reject_token,
-      row,
-    });
-
     try {
-      await sendMailtrap({
-        to: APPROVAL_EMAIL,
-        subject: `[Approval needed] Discount code ${row.code}`,
-        html,
-        text,
-      });
+      await sendDiscountApprovalEmail(row, baseUrl);
     } catch (e: unknown) {
       console.error("Mailtrap send error", e);
       const message = errorMessage(e);
@@ -332,6 +320,25 @@ export const submitDiscountRequest = createServerFn({ method: "POST" })
 
     return { id: row.id, code: row.code, emailSent: true };
   });
+
+async function sendDiscountApprovalEmail(
+  row: DiscountRequestRow,
+  baseUrl: string,
+  resubmitted = false,
+) {
+  const { html, text } = buildApprovalEmail({
+    baseUrl,
+    approveToken: row.approve_token,
+    rejectToken: row.reject_token,
+    row,
+  });
+  await sendMailtrap({
+    to: APPROVAL_EMAIL,
+    subject: `[${resubmitted ? "Resubmitted" : "Approval needed"}] Discount code ${row.code}`,
+    html,
+    text,
+  });
+}
 
 function discountRequestPayload(data: z.infer<typeof SubmitSchema>) {
   return {
@@ -384,11 +391,13 @@ export const updateDiscountRequest = createServerFn({ method: "POST" })
       throw new Error("Approved discount requests cannot be edited");
     }
 
+    // An edit is a resubmission: whatever the previous outcome, it goes back
+    // to the approver for a fresh decision.
     const { data: row, error } = await supabaseAdmin
       .from("discount_requests")
       .update({
         ...discountRequestPayload(data),
-        status: existing.status === "failed" ? "pending" : existing.status,
+        status: "pending",
         error_message: null,
         momence_response: null,
       })
@@ -401,7 +410,44 @@ export const updateDiscountRequest = createServerFn({ method: "POST" })
       throw new Error(`Failed to update request: ${error?.message ?? "unknown error"}`);
     }
 
-    return { id: row.id, code: row.code };
+    try {
+      await sendDiscountApprovalEmail(row, getBaseUrl(), true);
+    } catch (e: unknown) {
+      const message = errorMessage(e);
+      await supabaseAdmin
+        .from("discount_requests")
+        .update({ error_message: `Email send failed: ${message}` })
+        .eq("id", row.id);
+      return { id: row.id, code: row.code, emailSent: false, emailError: message };
+    }
+
+    return { id: row.id, code: row.code, emailSent: true };
+  });
+
+/**
+ * Re-sends the approval email for a request that is stuck — e.g. Momence
+ * sign-in failed when it was approved. Approval itself stays with the
+ * approver; this only puts a working link back in their inbox.
+ */
+export const resendDiscountApprovalEmail = createServerFn({ method: "POST" })
+  .inputValidator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
+  .handler(async ({ data }) => {
+    const { data: row, error } = await supabaseAdmin
+      .from("discount_requests")
+      .select("*")
+      .eq("id", data.id)
+      .maybeSingle();
+
+    if (error) throw new Error(error.message);
+    if (!row) throw new Error("Discount request not found");
+    if (row.status === "approved") throw new Error("This request is already approved");
+
+    await sendDiscountApprovalEmail(row, getBaseUrl(), true);
+    await supabaseAdmin
+      .from("discount_requests")
+      .update({ status: "pending", error_message: null })
+      .eq("id", row.id);
+    return { ok: true };
   });
 
 export const listDiscountRequests = createServerFn({ method: "GET" }).handler(async () => {

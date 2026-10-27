@@ -39,8 +39,17 @@ export const MOMENCE_SESSION_EXPIRED =
   "Momence sign-in failed. Check MOMENCE_USERNAME, MOMENCE_PASSWORD and MOMENCE_TOTP_SECRET — the account's password or authenticator secret may have changed.";
 
 export class MomenceSessionError extends Error {
-  constructor(public status: number) {
-    super(MOMENCE_SESSION_EXPIRED);
+  constructor(
+    public status: number,
+    step: "login" | "mfa" | "request" = "request",
+  ) {
+    super(
+      step === "login"
+        ? `Momence rejected the password login (HTTP ${status}). Check MOMENCE_USERNAME and MOMENCE_PASSWORD.`
+        : step === "mfa"
+          ? `Momence rejected the MFA code (HTTP ${status}). Check MOMENCE_TOTP_SECRET and that the server clock is correct.`
+          : `${MOMENCE_SESSION_EXPIRED} (HTTP ${status})`,
+    );
     this.name = "MomenceSessionError";
   }
 }
@@ -243,9 +252,7 @@ async function signIn(staleCookie: string | null = null): Promise<string> {
     return stored.cookie;
   }
 
-  const limitedUntil = stored?.rate_limited_until
-    ? Date.parse(stored.rate_limited_until)
-    : null;
+  const limitedUntil = stored?.rate_limited_until ? Date.parse(stored.rate_limited_until) : null;
   if (limitedUntil && limitedUntil > Date.now()) {
     throw new MomenceRateLimitError(limitedUntil - Date.now());
   }
@@ -273,7 +280,7 @@ async function signIn(staleCookie: string | null = null): Promise<string> {
   });
 
   if (login.status === 429) throw await recordRateLimit(stored);
-  if (!login.ok) throw new MomenceSessionError(login.status);
+  if (!login.ok) throw new MomenceSessionError(login.status, "login");
 
   const loginCookies = readSetCookies(login);
   const loginBody = (await login.json().catch(() => null)) as {
@@ -314,7 +321,7 @@ async function signIn(staleCookie: string | null = null): Promise<string> {
   });
 
   if (mfa.status === 429) throw await recordRateLimit(stored);
-  if (!mfa.ok) throw new MomenceSessionError(mfa.status);
+  if (!mfa.ok) throw new MomenceSessionError(mfa.status, "mfa");
 
   const cookie = mergeCookies(
     deviceCookie ? [deviceCookie] : [],

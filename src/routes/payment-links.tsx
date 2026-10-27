@@ -354,7 +354,20 @@ function PaymentLinksPage() {
         },
       } as never),
     onSuccess: (res) => {
-      const link = (res as { paymentLink?: PaymentLinkRow }).paymentLink;
+      const result = res as {
+        paymentLink?: PaymentLinkRow;
+        emailSent?: boolean;
+        emailError?: string;
+      };
+      const link = result.paymentLink;
+      if (result.emailSent === false) {
+        toast.warning("Request saved, approval email not sent", {
+          description: result.emailError ?? "Email delivery failed.",
+        });
+        resetForm();
+        queryClient.invalidateQueries({ queryKey: ["stripe-payment-links"] });
+        return;
+      }
       toast.success(editingId ? "Payment link request updated" : "Payment link request submitted", {
         description: link?.product_name
           ? `${link.product_name} is awaiting approval.`

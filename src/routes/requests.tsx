@@ -1,9 +1,9 @@
 import { createFileRoute, Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy, ExternalLink, RefreshCw } from "lucide-react";
+import { Copy, ExternalLink, Mail, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
-import { listDiscountRequests } from "@/lib/discount.functions";
+import { listDiscountRequests, resendDiscountApprovalEmail } from "@/lib/discount.functions";
 import {
   listStripePaymentLinks,
   syncStripePaymentLink,
@@ -53,6 +53,7 @@ function RequestsPage() {
   const fn = useServerFn(listDiscountRequests);
   const linksFn = useServerFn(listStripePaymentLinks);
   const syncFn = useServerFn(syncStripePaymentLink);
+  const resendFn = useServerFn(resendDiscountApprovalEmail);
 
   const { data, isLoading } = useQuery({
     queryKey: ["discount-requests"],
@@ -79,6 +80,21 @@ function RequestsPage() {
     },
     onError: (error) => {
       toast.error("Could not sync with Stripe", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    },
+  });
+
+  const resendMutation = useMutation({
+    mutationFn: (id: string) => resendFn({ data: { id } }),
+    onSuccess: () => {
+      toast.success("Approval email re-sent", {
+        description: "The approver can open the new email to approve again.",
+      });
+      queryClient.invalidateQueries({ queryKey: ["discount-requests"] });
+    },
+    onError: (error) => {
+      toast.error("Could not resend approval email", {
         description: error instanceof Error ? error.message : String(error),
       });
     },
@@ -222,13 +238,25 @@ function RequestsPage() {
                       {r.status === "approved" ? (
                         <span className="text-xs text-muted-foreground">Locked</span>
                       ) : (
-                        <Link
-                          to="/requests/$requestId/edit"
-                          params={{ requestId: r.id }}
-                          className="text-xs font-medium text-primary hover:underline"
-                        >
-                          Edit
-                        </Link>
+                        <div className="flex items-center justify-end gap-3">
+                          <Link
+                            to="/requests/$requestId/edit"
+                            params={{ requestId: r.id }}
+                            className="text-xs font-medium text-primary hover:underline"
+                          >
+                            Edit
+                          </Link>
+                          <button
+                            type="button"
+                            title="Re-send the approval email"
+                            disabled={resendMutation.isPending}
+                            onClick={() => resendMutation.mutate(r.id)}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline disabled:opacity-50"
+                          >
+                            <Mail className="h-3.5 w-3.5" />
+                            Resend
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>

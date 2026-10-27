@@ -660,7 +660,20 @@ export const updateStripePaymentLinkRequest = createServerFn({ method: "POST" })
       .single();
 
     if (error || !row) throw new Error(`Failed to update request: ${error?.message}`);
-    return { paymentLink: row as PaymentLinkRow };
+
+    // The edit is a resubmission, so the approver needs the updated details.
+    try {
+      await sendApprovalEmail(row as PaymentLinkRow, getBaseUrl(), true);
+    } catch (e: unknown) {
+      const message = errorMessage(e);
+      await supabaseAdmin
+        .from("payment_link_requests")
+        .update({ error_message: `Email send failed: ${message}` })
+        .eq("id", row.id);
+      return { paymentLink: row as PaymentLinkRow, emailSent: false, emailError: message };
+    }
+
+    return { paymentLink: row as PaymentLinkRow, emailSent: true };
   });
 
 function buildApprovalEmail(row: PaymentLinkRow, baseUrl: string) {
@@ -838,14 +851,96 @@ async function sendCreatedEmail(row: PaymentLinkRow, promoState: PromoState) {
   }
 }
 
-async function sendApprovalEmail(row: PaymentLinkRow, baseUrl: string) {
+async function sendApprovalEmail(row: PaymentLinkRow, baseUrl: string, resubmitted = false) {
   const email = buildApprovalEmail(row, baseUrl);
   await sendMailtrap({
     to: APPROVAL_EMAIL,
-    subject: `[Approval needed] Stripe payment link ${row.product_name}`,
+    subject: `[${resubmitted ? "Resubmitted" : "Approval needed"}] Stripe payment link ${row.product_name}`,
     html: email.html,
     text: email.text,
   });
+}
+
+/**
+ * `created_by` is an associate's name, so their inbox comes from the optional
+ * ASSOCIATE_EMAILS env var: a JSON object of name → email address.
+ */
+function associateEmail(name: string | null) {
+  if (!name) return null;
+  try {
+    const map = JSON.parse(process.env.ASSOCIATE_EMAILS ?? "{}") as Record<string, unknown>;
+    const email = map[name];
+    return typeof email === "string" && email.includes("@") ? email.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+export type CapturedPayment = {
+  sessionId: string;
+  amount: number;
+  currency: string;
+  paidAt: Date;
+  customerName: string | null;
+  customerEmail: string | null;
+  customerPhone: string | null;
+  paymentIntentId: string | null;
+};
+
+function buildPaymentReceivedEmail(row: PaymentLinkRow, payment: CapturedPayment) {
+  const rows: Array<[string, string]> = [
+    ["Amount paid", money(payment.amount, payment.currency)],
+    ["Paid at", payment.paidAt.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })],
+    ["Paid by", payment.customerName || "Not provided"],
+    ["Payer email", payment.customerEmail || "Not provided"],
+  ];
+  if (payment.customerPhone) rows.push(["Payer phone", payment.customerPhone]);
+  rows.push(["Product", row.product_name ?? "Stripe product"]);
+  const promotion = describePromotion(rowPromotion(row));
+  if (promotion.code) rows.push(["Promo code", promotion.label]);
+  rows.push(["Created by", row.created_by || "Not specified"]);
+  if (row.purpose) rows.push(["Purpose", row.purpose]);
+  rows.push(["Payments on this link", String(row.payment_count ?? 0)]);
+  rows.push([
+    "Total collected",
+    money(row.total_paid_amount ?? 0, row.currency ?? payment.currency),
+  ]);
+  rows.push(["Payment link", row.stripe_payment_link_url ?? "—"]);
+  rows.push(["Checkout session", payment.sessionId]);
+  if (payment.paymentIntentId) rows.push(["Payment intent", payment.paymentIntentId]);
+
+  const html = `<!doctype html><html><body style="margin:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <div style="max-width:620px;margin:0 auto;padding:32px 16px;">
+    <div style="background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e2e8f0;">
+      <div style="background:linear-gradient(135deg,#065f46,#10b981);padding:28px 32px;">
+        <div style="color:rgba(255,255,255,0.85);font-size:12px;letter-spacing:0.08em;text-transform:uppercase;font-weight:600;">Stripe · Payment received</div>
+        <h1 style="color:#fff;margin:8px 0 0;font-size:22px;font-weight:700;">${escapeHtml(money(payment.amount, payment.currency))} received</h1>
+      </div>
+      <div style="padding:24px 32px;">
+        <p style="margin:0 0 18px;color:#334155;font-size:14px;line-height:1.6;">A payment was captured on the ${escapeHtml(row.product_name ?? "Stripe")} payment link.</p>
+        <table style="width:100%;border-collapse:collapse;border:1px solid #f1f5f9;">${detailRows(rows)}</table>
+      </div>
+    </div>
+  </div></body></html>`;
+
+  const text = `Payment received\n\n${rows.map(([k, v]) => `${k}: ${v}`).join("\n")}`;
+  return { html, text };
+}
+
+/** Sent by the Stripe webhook for every captured payment on a link. */
+export async function sendPaymentReceivedEmail(row: PaymentLinkRow, payment: CapturedPayment) {
+  const email = buildPaymentReceivedEmail(row, payment);
+  const recipients = new Set(createdEmailRecipients());
+  const creator = associateEmail(row.created_by);
+  if (creator) recipients.add(creator);
+  for (const to of recipients) {
+    await sendMailtrap({
+      to,
+      subject: `[Payment received] ${money(payment.amount, payment.currency)} — ${row.product_name ?? "Stripe product"}`,
+      html: email.html,
+      text: email.text,
+    });
+  }
 }
 
 /**

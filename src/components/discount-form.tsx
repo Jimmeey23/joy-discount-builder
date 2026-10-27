@@ -345,9 +345,9 @@ export function DiscountForm({ initialRequest }: { initialRequest?: DiscountRequ
         emailSent?: boolean;
         emailError?: string;
       };
-      if (isEdit) {
+      if (isEdit && result.emailSent !== false) {
         toast.success("Request updated", {
-          description: `Code ${result.code} can still be approved from the original approval link.`,
+          description: `Updated approval email sent for code ${result.code}.`,
         });
       } else if (result.emailSent === false) {
         toast.warning("Request saved, approval email not sent", {

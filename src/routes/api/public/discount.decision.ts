@@ -261,12 +261,9 @@ function duplicatePromptPage(
   const rows = matches
     .map(
       (match) =>
-        `<tr><td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${escapeHtml(match.code)}</td><td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;">${escapeHtml(valueLabel)}</td><td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;color:#64748b;">${escapeHtml(match.expiresAt ?? "No expiry shown")}</td></tr>`,
+        `<tr><td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${escapeHtml(match.code)}</td><td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;">${escapeHtml(valueLabel)}</td><td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;color:#64748b;">${escapeHtml(match.expiresAt ?? "No expiry shown")}</td><td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;text-align:right;"><a href="${escapeHtml(actionUrl(token, "use-existing", { existingCode: match.code }))}" style="display:inline-block;background:#10b981;color:#fff;text-decoration:none;padding:6px 12px;border-radius:8px;font-weight:600;font-size:13px;white-space:nowrap;">Use this code</a></td></tr>`,
     )
     .join("");
-  const useExistingUrl = actionUrl(token, "use-existing", {
-    existingCode: matches[0]?.code ?? "",
-  });
   const createUrl = actionUrl(token, "approve", { create: "1" });
 
   return `<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Matching discount found</title></head>
@@ -274,13 +271,12 @@ function duplicatePromptPage(
   <div style="background:#fff;border:1px solid #e2e8f0;border-radius:18px;padding:34px;max-width:680px;width:100%;box-shadow:0 4px 24px rgba(15,23,42,0.06);">
     <div style="width:56px;height:56px;border-radius:50%;background:#6366f1;color:#fff;font-size:28px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-bottom:18px;">i</div>
     <h1 style="margin:0 0 8px;font-size:22px;color:#0f172a;">Matching Momence discount found</h1>
-    <p style="margin:0 0 18px;color:#475569;font-size:14px;line-height:1.6;">Momence already has an active ${escapeHtml(valueLabel)} discount. Use an existing code where possible, or create a new code if this request needs a distinct code.</p>
+    <p style="margin:0 0 18px;color:#475569;font-size:14px;line-height:1.6;">Momence already has an active ${escapeHtml(valueLabel)} discount. Pick the existing code to use, or create a new code if this request needs a distinct code.</p>
     <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;font-size:14px;">
-      <thead style="background:#f8fafc;color:#64748b;text-align:left;"><tr><th style="padding:10px 12px;">Code</th><th style="padding:10px 12px;">Value</th><th style="padding:10px 12px;">Expiry</th></tr></thead>
+      <thead style="background:#f8fafc;color:#64748b;text-align:left;"><tr><th style="padding:10px 12px;">Code</th><th style="padding:10px 12px;">Value</th><th style="padding:10px 12px;">Expiry</th><th style="padding:10px 12px;"></th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:24px;">
-      <a href="${useExistingUrl}" style="display:inline-block;background:#10b981;color:#fff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:600;font-size:14px;">Use existing code</a>
       <a href="${createUrl}" style="display:inline-block;background:#fff;color:#0f172a;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:600;font-size:14px;border:1px solid #cbd5e1;">Create new code anyway</a>
     </div>
   </div>
@@ -413,12 +409,13 @@ export const Route = createFileRoute("/api/public/discount/decision")({
         }
 
         if (action === "use-existing") {
-          const existingCode = url.searchParams.get("existingCode");
+          const existingCode = url.searchParams.get("existingCode")?.trim() || null;
           await supabaseAdmin
             .from("discount_requests")
             .update({
               status: "approved",
               approved_at: new Date().toISOString(),
+              error_message: null,
               momence_response: {
                 reusedExistingDiscount: true,
                 existingCode,
@@ -484,6 +481,7 @@ export const Route = createFileRoute("/api/public/discount/decision")({
             .update({
               status: "approved",
               approved_at: new Date().toISOString(),
+              error_message: null,
               momence_response: result.body,
             })
             .eq("id", row.id);
